@@ -7,138 +7,162 @@ sidebar_label: Async Completion
 
 # Async Completion
 
-Node libraries handle asynchronicity in a variety of ways. The most common pattern is [error-first callbacks][node-api-error-first-callbacks], but you might also encounter [streams][stream-docs], [promises][promise-docs], [event emitters][event-emitter-docs], [child processes][child-process-docs], or [observables][observable-docs]. Gulp tasks normalize all these types of asynchronicity.
+gulp has to know when a task is finished, so it can log a duration, decide when
+the next task in a series may begin, and record a successful run for
+[`LastRun()`][last-run-api].
 
-## Signal task completion
+In JavaScript that question is genuinely hard: a task may return a stream, a
+promise, an event emitter, a child process or an observable, or it may take an
+error-first callback, and gulp has to sniff which one it got. Go collapses all
+six conventions into one signature.
 
-When a stream, promise, event emitter, child process, or observable is returned from a task, the success or error informs gulp whether to continue or end. If a task errors, gulp will end immediately and show that error.
+## Signature
 
-When composing tasks with `series()`, an error will end the composition and no further tasks will be executed. When composing tasks with `parallel()`, an error will end the composition but the other parallel tasks may or may not complete.
-
-### Returning a stream
-
-```js
-const { src, dest } = require('gulp');
-
-function streamTask() {
-  return src('*.js')
-    .pipe(dest('output'));
-}
-
-exports.default = streamTask;
+```go
+func(ctx context.Context) error
 ```
 
-### Returning a promise
+Returning `nil` means success. Returning an error fails the task, and any
+series it belongs to.
 
-```js
-function promiseTask() {
-  return Promise.resolve('the value is ignored');
+```go
+func clean(ctx context.Context) error {
+	return os.RemoveAll("dist")
 }
-
-exports.default = promiseTask;
 ```
 
-### Returning an event emitter
+Because the signature is fixed, there is no such thing as forgetting to signal
+completion. gulp's most common JavaScript error — *"Did you forget to signal
+async completion?"* — cannot happen here.
 
-```js
-const { EventEmitter } = require('events');
+## Returning a pipeline
 
-function eventEmitterTask() {
-  const emitter = new EventEmitter();
-  // Emit has to happen async otherwise gulp isn't listening yet
-  setTimeout(() => emitter.emit('finish'), 250);
-  return emitter;
+A file pipeline finishes when its last stage finishes, so return `Run`:
+
+```go
+func styles(ctx context.Context) error {
+	return gulp.Src([]string{"src/**/*.css"}).
+		Pipe(gulp.Dest("dist")).
+		Run(ctx)
 }
-
-exports.default = eventEmitterTask;
 ```
 
-### Returning a child process
+`Run` drains the pipeline, waits for every stage, and returns the first error
+any of them produced. If you would rather register a pipeline directly, `AsTask`
+gives you the same function:
 
-```js
-const { exec } = require('child_process');
-
-function childProcessTask() {
-  return exec('date');
-}
-
-exports.default = childProcessTask;
+```go
+gulp.Task("styles", gulp.Src([]string{"src/**/*.css"}).
+	Pipe(gulp.Dest("dist")).
+	AsTask())
 ```
 
-### Returning an observable
+> Building a pipeline performs no work. Nothing is globbed, opened or written
+> until a terminal call such as `Run`, `Each` or `Collect`. That laziness is
+> deliberate: it means a pipeline built at registration time still sees the
+> files that exist when the task actually runs.
 
-```js
-const { of } = require('rxjs');
+## Handling cancellation
 
-function observableTask() {
-  return of(1, 2, 3);
+The context is not decoration. gulp cancels it when you press `Ctrl-C`, and
+`Parallel` cancels it for the remaining siblings as soon as one of them fails.
+A long-running task should watch it:
+
+```go
+func compile(ctx context.Context) error {
+	for _, unit := range units {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if err := build(unit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
-
-exports.default = observableTask;
 ```
 
-### Using an error-first callback
+Anything that already accepts a context — `exec.CommandContext`,
+`http.NewRequestWithContext`, most database drivers — handles this for free.
 
-If nothing is returned from your task, you must use the error-first callback to signal completion. The callback will be passed to your task as the only argument - named `cb()` in the examples below.
+## Wrapping other shapes
 
-```js
-function callbackTask(cb) {
-  // `cb()` should be called by some async work
-  cb();
+The `asyncdone` adapters exist for code that does not already have the right
+signature. They are in `internal/`, so the exported equivalents live on the
+types you already use, but the patterns are worth knowing.
+
+### An external command
+
+```go
+func bundle(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "esbuild", "src/app.js", "--outfile=dist/app.js")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
-
-exports.default = callbackTask;
 ```
 
-To indicate to gulp that an error occurred in a task using an error-first callback, call it with an `Error` as the only argument.
+`CommandContext` kills the process when the context is cancelled, which is what
+makes `Ctrl-C` responsive.
 
-```js
-function callbackError(cb) {
-  // `cb()` should be called by some async work
-  cb(new Error('kaboom'));
+### A callback-based library
+
+```go
+func upload(ctx context.Context) error {
+	done := make(chan error, 1)
+	client.Upload("dist", func(err error) { done <- err })
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
-
-exports.default = callbackError;
 ```
 
-However, you'll often pass this callback to another API instead of calling it yourself.
+The buffered channel matters. If the library calls back after the context is
+cancelled, an unbuffered send would leak the goroutine forever.
 
-```js
-const fs = require('fs');
+> A JavaScript task that calls `done()` twice crashes the process. This port
+> ignores the second signal rather than panicking.
 
-function passingCallback(cb) {
-  fs.access('gulpfile.js', cb);
+### Work that has no natural error
+
+```go
+func banner(ctx context.Context) error {
+	fmt.Println("building")
+	return nil
 }
-
-exports.default = passingCallback;
 ```
 
-## No synchronous tasks
+Synchronous tasks are perfectly legal in Go. JavaScript gulp cannot support
+them, because it has no way to tell a synchronous function from an async one
+that forgot to signal.
 
-Synchronous tasks are no longer supported. They often led to subtle mistakes that were hard to debug, like forgetting to return your streams from a task.
+## Errors and the build
 
-When you see the _"Did you forget to signal async completion?"_ warning, none of the techniques mentioned above were used. You'll need to use the error-first callback or return a stream, promise, event emitter, child process, or observable to resolve the issue.
+A failing task stops its series, is logged in red with the elapsed time, and
+makes the process exit non-zero:
 
-## Using async/await
-
-When not using any of the previous options, you can define your task as an [`async` function][async-await-docs], which wraps your task in a promise. This allows you to work with promises synchronously using `await` and use other synchronous code.
-
-```js
-const fs = require('fs');
-
-async function asyncAwaitTask() {
-  const { version } = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-  console.log(version);
-  await Promise.resolve('some result');
-}
-
-exports.default = asyncAwaitTask;
+```
+[13:05:29] 'compile' errored after 812 ms
+[13:05:29] exit status 1
 ```
 
-[node-api-error-first-callbacks]: https://nodejs.org/api/errors.html#errors_error_first_callbacks
-[stream-docs]: https://nodejs.org/api/stream.html#stream_stream
-[promise-docs]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Using_promises
-[event-emitter-docs]: https://nodejs.org/api/events.html#events_events
-[child-process-docs]: https://nodejs.org/api/child_process.html#child_process_child_process
-[observable-docs]: https://github.com/tc39/proposal-observable/blob/master/README.md
-[async-await-docs]: https://developers.google.com/web/fundamentals/primers/async-functions
+The task is also **not** recorded as a successful run, so
+[`LastRun()`][last-run-api] keeps returning the previous success and the next
+incremental build will pick the failed files up again.
+
+To let the remaining tasks run anyway, use `--continue` on the command line, or
+`SettleSeries`/`SettleParallel` in code. Both collect every error instead of
+stopping at the first, and neither cancels its siblings.
+
+## Next
+
+[Working with Files][files]
+
+[last-run-api]: ../api/last-run.md
+[files]: 5-working-with-files.md

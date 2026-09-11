@@ -1,5 +1,5 @@
-<!-- front-matter
-id: creating-custom-registries
+<!--
+name: creating-custom-registries
 title: Creating Custom Registries
 hide_title: true
 sidebar_label: Creating Custom Registries
@@ -7,201 +7,197 @@ sidebar_label: Creating Custom Registries
 
 # Creating Custom Registries
 
-Allows custom registries to be plugged into the task system, which can provide shared tasks or augmented functionality. Registries are registered using [`registry()`][registry-api-docs].
+A registry is where tasks live. Replacing it lets you share a set of tasks
+between projects, pre-register tasks from a directory of files, or wrap every
+task with instrumentation of your own.
 
-## Structure
+## The interface
 
-In order to be accepted by gulp, custom registries must follow a specific format.
+A registry implements four methods:
 
-```js
-// as a function
-function TestRegistry() {}
-
-TestRegistry.prototype.init = function (gulpInst) {}
-TestRegistry.prototype.get = function (name) {}
-TestRegistry.prototype.set = function (name, fn) {}
-TestRegistry.prototype.tasks = function () {}
-
-// as a class
-class TestRegistry {
-  init(gulpInst) {}
-
-  get(name) {}
-
-  set(name, fn) {}
-
-  tasks() {}
+```go
+type Registry interface {
+	Get(name string) (*undertaker.Task, bool)
+	Set(name string, task *undertaker.Task) *undertaker.Task
+	Init(u *undertaker.Undertaker)
+	Tasks() map[string]*undertaker.Task
 }
 ```
 
-If a registry instance passed to `registry()` doesn't have all four methods, an error will be thrown.
+`Init` runs once, when the registry is installed. It receives the `Undertaker`
+so a registry can register tasks of its own during setup. `Set` returns the
+task that was stored, which lets a registry substitute a wrapped version.
 
-## Registration
+> In JavaScript, gulp checks at runtime that the object you pass has all four
+> methods and throws ``Custom registry must have `get` function.`` and four
+> siblings when it does not. In Go the compiler checks this, so those five
+> error messages have no counterpart. Passing `nil` is still rejected, with
+> `ErrNilRegistry`.
 
-If we want to register our example registry from above, we will need to pass an instance of it to `registry()`.
+## Installing one
 
-```js
-const { registry } = require('gulp');
-
-// ... TestRegistry setup code
-
-// good!
-registry(new TestRegistry())
-
-// bad!
-registry(TestRegistry())
-// This will trigger an error: 'Custom registries must be instantiated, but it looks like you passed a constructor'
+```go
+if err := gulp.SetRegistry(NewSharedRegistry()); err != nil {
+	log.Fatal(err)
+}
 ```
 
-## Methods
+Tasks already registered are transferred into the new registry first, in
+registration order, and only then is `Init` called. That ordering matters: it
+means a registry can see the tasks a gulpfile registered before it was
+installed, and it means installing a registry never loses work.
 
-### `init(gulpInst)`
+Only tasks registered with `Task` or `TaskRef` reach a registry. Functions
+passed directly to `Series` or `Parallel` are anonymous and are never stored.
 
-The `init()` method of a registry is called at the very end of the `registry()` function. The gulp instance passed as the only argument (`gulpInst`) can be used to pre-define tasks using
-`gulpInst.task(taskName, fn)`.
+## A registry that shares tasks
 
-#### Parameters
+The common case is a package that ships a standard set of tasks:
 
-| parameter | type | note |
-|:---------:|:----:|------|
-| gulpInst | object | Instance of gulp. |
+```go
+package buildkit
 
-### `get(name)`
+import (
+	"context"
 
-The `get()` method receives a task `name` for the custom registry to resolve and return, or `undefined` if no task with that name exists.
+	"github.com/gulpjs/gulp-go/undertaker"
+)
 
-#### Parameters
-
-| parameter | type | note |
-|:---------:|:----:|------|
-| name | string | Name of the task to be retrieved. |
-
-### `set(name, fn)`
-
-The `set()` method receives a task `name` and `fn`. This is called internally by `task()` to provide user-registered tasks to custom registries.
-
-#### Parameters
-
-| parameter | type | note |
-|:---------:|:----:|------|
-| name | string | Name of the task to be set. |
-| fn | function | Task function to be set. |
-
-### `tasks()`
-
-Must return an object listing all tasks in the registry.
-
-## Use Cases
-
-### Sharing Tasks
-
-To share common tasks with all your projects, you can expose an `init` method on the registry and it will receive an instance of gulp as the only argument. You can then use `gulpInst.task(name, fn)` to register pre-defined tasks.
-
-For example, you might want to share a `clean` task:
-
-```js
-const fs = require('fs');
-const util = require('util');
-
-const DefaultRegistry = require('undertaker-registry');
-const del = require('del');
-
-function CommonRegistry(opts){
-  DefaultRegistry.call(this);
-
-  opts = opts || {};
-
-  this.buildDir = opts.buildDir || './build';
+type Registry struct {
+	tasks map[string]*undertaker.Task
+	order []string
 }
 
-util.inherits(CommonRegistry, DefaultRegistry);
-
-CommonRegistry.prototype.init = function(gulpInst) {
-  const buildDir = this.buildDir;
-  const exists = fs.existsSync(buildDir);
-
-  if(exists){
-    throw new Error('Cannot initialize common tasks. ' + buildDir + ' directory exists.');
-  }
-
-  gulpInst.task('clean', function(){
-    return del([buildDir]);
-  });
+func New() *Registry {
+	return &Registry{tasks: make(map[string]*undertaker.Task)}
 }
 
-module.exports = CommonRegistry;
-```
-
-Then to use it in a project:
-
-```js
-const { registry, series, task } = require('gulp');
-const CommonRegistry = require('myorg-common-tasks');
-
-registry(new CommonRegistry({ buildDir: '/dist' }));
-
-task('build', series('clean', function build(cb) {
-  // do things
-  cb();
-}));
-```
-
-### Sharing Functionality
-
-By controlling how tasks are added to the registry, you can decorate them.
-
-For example, if you wanted all tasks to share some data, you can use a custom registry to bind them to that data. Be sure to return the altered task, as per the description of registry methods above:
-
-```js
-const { registry, series, task } = require('gulp');
-const util = require('util');
-const DefaultRegistry = require('undertaker-registry');
-
-// Some task defined somewhere else
-const BuildRegistry = require('./build.js');
-const ServeRegistry = require('./serve.js');
-
-function ConfigRegistry(config){
-  DefaultRegistry.call(this);
-  this.config = config;
+func (r *Registry) Init(u *undertaker.Undertaker) {
+	u.Set("clean", func(ctx context.Context) error { return clean(ctx) })
+	u.Set("lint", func(ctx context.Context) error { return lint(ctx) })
 }
 
-util.inherits(ConfigRegistry, DefaultRegistry);
+func (r *Registry) Get(name string) (*undertaker.Task, bool) {
+	t, ok := r.tasks[name]
+	return t, ok
+}
 
-ConfigRegistry.prototype.set = function set(name, fn) {
-  var bound = fn.bind(this.config);
-  // Preserve internal properties and task metadata.
-  var task = Object.assign(bound, fn);
-  // The `DefaultRegistry` uses `this._tasks` for storage.
-  this._tasks[name] = task;
-  return task;
-};
+func (r *Registry) Set(name string, task *undertaker.Task) *undertaker.Task {
+	if _, exists := r.tasks[name]; !exists {
+		r.order = append(r.order, name)
+	}
+	r.tasks[name] = task
+	return task
+}
 
-registry(new BuildRegistry());
-registry(new ServeRegistry());
-
-// `registry` will reset each task in the registry with
-// `ConfigRegistry.prototype.set` which will bind them to the config object.
-registry(new ConfigRegistry({
-  src: './src',
-  build: './build',
-  bindTo: '0.0.0.0:8888'
-}));
-
-task('default', series('clean', 'build', 'serve', function(cb) {
-  console.log('Server bind to ' + this.bindTo);
-  console.log('Serving' + this.build);
-  cb();
-}));
+func (r *Registry) Tasks() map[string]*undertaker.Task {
+	out := make(map[string]*undertaker.Task, len(r.tasks))
+	for name, task := range r.tasks {
+		out[name] = task
+	}
+	return out
+}
 ```
 
-## Examples
+A gulpfile then gets `clean` and `lint` for free and can still add its own:
 
-* [undertaker-registry][undertaker-registry-example]: The Gulp 4 default registry.
-* [undertaker-common-tasks][undertaker-common-tasks-example]: Proof-of-concept custom registry that pre-defines tasks.
-* [undertaker-task-metadata][undertaker-task-metadata-example]: Proof-of-concept custom registry that attaches metadata to each task.
+```go
+func main() {
+	if err := gulp.SetRegistry(buildkit.New()); err != nil {
+		log.Fatal(err)
+	}
+	gulp.Task("build", build)
+	gulp.TaskRef("default", gulp.Series(gulp.Names("clean", "lint", "build")...))
+	gulp.Main()
+}
+```
 
-[registry-api-docs]: ../api/registry.md
-[undertaker-registry-example]: https://github.com/gulpjs/undertaker-registry
-[undertaker-common-tasks-example]: https://github.com/gulpjs/undertaker-common-tasks
-[undertaker-task-metadata-example]: https://github.com/gulpjs/undertaker-task-metadata
+## Preserving registration order
+
+Go maps have no order, but `--tasks` and `--tasks-simple` list tasks in the
+order they were registered, and `--sort-tasks` exists to override that. A
+registry can preserve the order by implementing one extra method:
+
+```go
+type OrderedRegistry interface {
+	Names() []string
+}
+```
+
+```go
+func (r *Registry) Names() []string { return slices.Clone(r.order) }
+```
+
+That is why the example above keeps an `order` slice alongside the map. A
+registry that does not implement `Names` still works; its tasks are simply
+listed alphabetically.
+
+> This interface has no JavaScript counterpart. There, a registry stores tasks
+> on a plain object and `Object.keys` returns them in insertion order for
+> free.
+
+## A registry that wraps every task
+
+Because `Set` returns the task that gets stored, a registry can decorate what
+it is given. This one records how long each task takes:
+
+```go
+type TimingRegistry struct {
+	*undertaker.DefaultRegistry
+	mu      sync.Mutex
+	elapsed map[string]time.Duration
+}
+
+func NewTimingRegistry() *TimingRegistry {
+	return &TimingRegistry{
+		DefaultRegistry: undertaker.NewDefaultRegistry(),
+		elapsed:         make(map[string]time.Duration),
+	}
+}
+
+func (r *TimingRegistry) Set(name string, task *undertaker.Task) *undertaker.Task {
+	inner := task.Fn
+	task.Fn = func(ctx context.Context) error {
+		start := time.Now()
+		err := inner(ctx)
+		r.mu.Lock()
+		r.elapsed[name] = time.Since(start)
+		r.mu.Unlock()
+		return err
+	}
+	return r.DefaultRegistry.Set(name, task)
+}
+```
+
+Embedding `*undertaker.DefaultRegistry` supplies `Get`, `Init`, `Tasks` and
+`Names`, so only the interesting method has to be written.
+
+For timing specifically you do not need a registry at all — `gulp.On` already
+reports a duration for every task. Reach for a wrapping registry when you need
+to change what a task *does*, not merely observe it.
+
+## Observing tasks instead
+
+```go
+gulp.On(func(evt gulp.Event) {
+	if evt.Kind == undertaker.EventStop && !evt.Branch {
+		log.Printf("%s took %s", evt.Name, evt.Duration)
+	}
+})
+```
+
+`Event` carries `UID`, `Name`, `Kind`, `Time`, `Duration`, `Branch` and `Err`.
+`UID` identifies one *execution*, so a task that runs three times produces
+three uids and a listener can pair a stop with its start. `Branch` is true for
+the `<series>` and `<parallel>` wrappers, which is how the CLI hides them
+unless you ask for `-LLLL`.
+
+## Related
+
+- [registry][registry-api] — the API reference
+- [tree][tree-api] — what `--tasks` reads
+- [task][task-api] — registering tasks
+
+[registry-api]: ../api/registry.md
+[tree-api]: ../api/tree.md
+[task-api]: ../api/task.md

@@ -1,130 +1,132 @@
-# Request for contributions
+# Contributing
 
-Please contribute to this repository if any of the following is true:
-- You have expertise in community development, communication, or education
-- You want open source communities to be more collaborative and inclusive
-- You want to help lower the burden to first time contributors
+This is a port of [gulp][gulp] 5.0.1 to Go. That single fact decides most of
+what a contribution should look like: the goal is not to design a build system,
+it is to reproduce one that already exists, and to be honest in writing wherever
+Go cannot.
 
-# How to contribute
+## Before you start
 
-Prerequisites:
+Read [MIGRATION.md][migration]. It records what was ported, what deliberately
+diverges, and why. A change that contradicts something written there needs to
+update that document in the same commit, or it is not finished.
 
-- familiarity with [GitHub PRs](https://help.github.com/articles/using-pull-requests) (pull requests) and issues
-- knowledge of Markdown for editing `.md` documents
+## Getting set up
 
-In particular, this community seeks the following types of contributions:
+```sh
+git clone https://github.com/gulpjs/gulp-go
+cd gulp-go
+make check
+```
 
-- ideas: participate in an Issues thread or start your own to have your voice
-heard
-- resources: submit a PR to add to [docs README.md](/docs/README.md) with links to related content
-- outline sections: help us ensure that this repository is comprehensive. If
-there is a topic that is overlooked, please add it, even if it is just a stub
-in the form of a header and single sentence. Initially, most things fall into
-this category
-- write: contribute your expertise in an area by helping us expand the included
-content
-- copy editing: fix typos, clarify language, and generally improve the quality
-of the content
-- formatting: help keep content easy to read with consistent formatting
-- code: Fix issues or contribute new features to this or any related projects
+`make check` runs formatting, `go vet`, the linter and the full test suite. It
+is the same gate CI applies, so a green `make check` locally means a green CI
+run.
 
-# Project structure
+The linter is optional locally — `make lint` skips itself with a notice when
+`golangci-lint` is not installed. Install it if you are touching more than a
+line or two:
 
-Gulp itself is tiny: index.js contains [very few lines of code](https://github.com/gulpjs/gulp/blob/master/index.js).
-It is powered by a few other libraries which each handle a few specific tasks
-each.
+```sh
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+```
 
-You can view all issues with the "help wanted" label across all gulp projects
-here: https://github.com/issues?utf8=%E2%9C%93&q=is%3Aopen+is%3Aissue+user%3Agulpjs+label%3A%22help+wanted%22+
+## Running the tests
 
-## Undertaker: task management
+```sh
+make test         # -race, with coverage
+make test-short   # skips the watcher and subprocess tests
+make cover        # opens the HTML coverage report
+```
 
-Undertaker handles task management in Gulp: the `gulp.task()`, `gulp.series()`
-and `gulp.parallel()` functions. `gulp.series()` and `gulp.parallel()` are in
-turn powered by Bach.
+Always use `-race`. Pipeline stages, watchers and the task runner are all
+goroutines, and a bug in any of them is invisible without it. `make test`
+already passes `-race`; if you run `go test` by hand, pass it yourself.
 
-- https://github.com/gulpjs/undertaker
-- https://github.com/gulpjs/bach
+Filesystem and watcher tests need `-count=1` when you re-run them, because a
+cached pass tells you nothing about the state of the disk.
 
-## vinyl-fs: file streams
+## The differential suite
 
-vinyl-fs powers the `gulp.src()` and `gulp.dest()` functions: they take files
-and globs specified by the user, turns them into a stream of file objects,
-and then puts them back into the filesystem when `gulp.dest()` is called.
+The most valuable tests in this repository compare the port against the real
+thing. They run gulp 5.0.1 in a Node subprocess and byte-compare the results.
 
-The file objects themselves are vinyl objects: that's another library (a simple
-one!)
+```sh
+npm install gulp@5.0.1 --prefix /tmp/gulp-js
+GULP_JS_REPO=/tmp/gulp-js/node_modules/gulp make differential
+```
 
-- https://github.com/gulpjs/vinyl-fs
-- https://github.com/gulpjs/vinyl
+Without `GULP_JS_REPO` the live cases skip and only the golden vectors run, so
+a plain `make check` never fails for want of Node.
 
-## chokidar: file watching
+**If you change globbing, path handling, `Src`, `Dest` or the task tree, run
+the differential suite.** Every serious bug found during this port was found
+this way and by nothing else — including a glob-parsing divergence that quietly
+sent `Dest()` output to the wrong directory.
 
-`gulp.watch()` is using chokidar for file watching. It's actually wrapped in a
-small library on the gulp organization, glob-watcher.
+## What a change should include
 
-- https://github.com/paulmillr/chokidar
-- https://github.com/gulpjs/glob-watcher
+**Cite the source.** When you fix a behavioural difference, say which upstream
+file you read. `vinyl-fs/lib/file-operations.js` is an argument; "this seems
+more correct" is not. The upstream packages are on npm and are small enough to
+read:
 
-## gulp-cli: running gulp
+```sh
+npm pack undertaker@2.0.0 && tar -xzf undertaker-2.0.0.tgz
+```
 
-Finally, we have gulp-cli. This uses liftoff to take what people run in the
-command line and run the correct tasks. It works with both gulp 4 and older
-versions of gulp.
+**Add a test that would have caught it.** Prefer a differential case over a
+hand-written assertion, because a hand-written assertion only encodes what you
+already believed. Several assertions in this repository were wrong in exactly
+that way and were corrected once the real gulp was consulted.
 
-- https://github.com/gulpjs/gulp-cli
-- https://github.com/js-cli/js-liftoff
+**Match gulp's wording exactly.** Error strings, log lines and CLI output are
+reproduced character for character, including capitalisation that Go's linters
+dislike — `staticcheck`'s ST1005 is suppressed for that reason. Do not tidy
+them.
 
-# Conduct
+**Document divergences where they are visible.** A note in MIGRATION.md, and a
+blockquote on the relevant page under `docs/`, so the reader meets it where the
+question arises rather than in an appendix.
 
-We are committed to providing a friendly, safe and welcoming environment for
-all, regardless of gender, sexual orientation, disability, ethnicity, religion,
-or similar personal characteristic.
+## Style
 
-On IRC, please avoid using overtly sexual nicknames or other nicknames that
-might detract from a friendly, safe and welcoming environment for all.
+The [`programming` conventions][programming] this repository follows in short:
 
-Please be kind and courteous. There's no need to be mean or rude.
-Respect that people have differences of opinion and that every design or
-implementation choice carries a trade-off and numerous costs. There is seldom
-a right answer, merely an optimal answer given a set of values and
-circumstances.
+- Strict types. No `any` where a real type will do.
+- Errors are values, wrapped with `%w`, matched with `errors.Is`/`errors.As`.
+- No panics in library code. A constructor that cannot fail early returns a
+  transform that reports the error when the pipeline runs.
+- Comments explain *why*, not *what*. Most of the comments here record an
+  upstream contract that the signature does not convey, or a concurrency
+  invariant that is easy to break during a refactor. Add one only when it is
+  carrying that kind of weight.
+- Exported symbols get doc comments. `revive`'s `exported` rule is enabled.
 
-Please keep unstructured critique to a minimum. If you have solid ideas you
-want to experiment with, make a fork and see how it works.
+Run `make fmt` before committing.
 
-We will exclude you from interaction if you insult, demean or harass anyone.
-That is not welcome behavior. We interpret the term "harassment" as
-including the definition in the
-[Citizen Code of Conduct](http://citizencodeofconduct.org/);
-if you have any lack of clarity about what might be included in that concept,
-please read their definition. In particular, we don't tolerate behavior that
-excludes people in socially marginalized groups.
+## Commit messages
 
-Private harassment is also unacceptable. No matter who you are, if you feel
-you have been or are being harassed or made uncomfortable by a community
-member, please contact one of the channel ops or any of the
-[gulpjs](https://github.com/orgs/gulpjs/people) core team
-immediately. Whether you're a regular contributor or a newcomer, we care about
-making this community a safe place for you and we've got your back.
+Match the existing history: a short imperative summary, and a body explaining
+why when the change is not self-evident. If you fixed a divergence, name the
+upstream file in the body.
 
-Likewise any spamming, trolling, flaming, baiting or other attention-stealing
-behavior is not welcome.
+## Reporting a bug
 
+The most useful bug report is a difference. Tell us what gulp does and what
+this does, ideally as a failing case in `differential_test.go`. The second most
+useful is a small `gulpfile.go` that reproduces the problem, plus the output
+of `gulp -LLLL <task>`.
 
-# Communication
+Security issues go through [SECURITY.md][security] instead.
 
-There is an IRC channel on irc.freenode.net, channel `#gulpjs`. You're
-welcome to drop in and ask questions, discuss bugs and such. The channel is
-not currently logged.
+## License
 
-GitHub issues are the primary way for communicating about specific proposed
-changes to this project.
+Contributions are accepted under the [MIT license][license], the same license
+gulp uses.
 
-In both contexts, please follow the conduct guidelines above. Language issues
-are often contentious and we'd like to keep discussion brief, civil and focused
-on what we're actually doing, not wandering off into too much imaginary stuff.
-
-# Frequently Asked Questions
-
-See [the FAQ docs page](/docs/FAQ.md)
+[gulp]: https://github.com/gulpjs/gulp
+[migration]: MIGRATION.md
+[security]: .github/SECURITY.md
+[license]: LICENSE
+[programming]: docs/writing-a-plugin/guidelines.md

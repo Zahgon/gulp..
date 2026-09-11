@@ -1,232 +1,229 @@
 <p align="center">
-  <a href="https://gulpjs.com">
-    <img height="257" width="114" src="https://raw.githubusercontent.com/gulpjs/artwork/master/gulp-2x.png">
-  </a>
-  <p align="center">The streaming build system</p>
+  <h1 align="center">gulp-go</h1>
+  <p align="center">The streaming build system, ported to Go.</p>
 </p>
 
-[![NPM version][npm-image]][npm-url] [![Downloads][downloads-image]][npm-url] [![Build Status][ci-image]][ci-url] [![Coveralls Status][coveralls-image]][coveralls-url]
+A faithful Go port of [gulp](https://github.com/gulpjs/gulp) 5.0.1. Same
+concepts, same task semantics, same CLI output — with a compiled gulpfile, real
+concurrency, and no `node_modules`.
 
-## What is gulp?
+```go
+package main
 
-- **Automation** - gulp is a toolkit that helps you automate painful or time-consuming tasks in your development workflow.
-- **Platform-agnostic** - Integrations are built into all major IDEs and people are using gulp with PHP, .NET, Node.js, Java, and other platforms.
-- **Strong Ecosystem** - Use npm modules to do anything you want + over 3000 curated plugins for streaming file transformations.
-- **Simple** - By providing only a minimal API surface, gulp is easy to learn and simple to use.
+import (
+	"context"
 
-## Installation
+	gulp "github.com/gulpjs/gulp-go"
+	"github.com/gulpjs/gulp-go/plugins"
+)
 
-Follow our [Quick Start guide][quick-start].
+func styles(ctx context.Context) error {
+	return gulp.Src([]string{"src/**/*.css"}).
+		Pipe(plugins.Concat("app.css")).
+		Pipe(gulp.Dest("dist")).
+		Run(ctx)
+}
 
-## Roadmap
+func main() {
+	gulp.Task("styles", styles)
+	gulp.TaskRef("default", gulp.Series(gulp.Name("styles")))
+	gulp.Main()
+}
+```
 
-Find out about all our work-in-progress and outstanding issues at https://github.com/orgs/gulpjs/projects.
+```
+$ go run .
+[13:05:29] Using gulpfile ~/project/gulpfile.go
+[13:05:29] Starting 'default'...
+[13:05:29] Starting 'styles'...
+[13:05:29] Finished 'styles' after 5.69 ms
+[13:05:29] Finished 'default' after 5.8 ms
+```
+
+## Install
+
+```
+go get github.com/gulpjs/gulp-go
+```
+
+Optionally install the launcher, which finds `gulpfile.go` and runs it:
+
+```
+go install github.com/gulpjs/gulp-go/cmd/gulp@latest
+```
+
+You do not need it. `go run .` does the same thing, because your gulpfile *is*
+the program.
+
+## Concepts
+
+If you know gulp, you know this library. Files flow through a pipeline as
+[vinyl](docs/api/concepts.md) values; `Src` reads them, transforms change them,
+`Dest` writes them.
+
+```go
+gulp.Src([]string{"src/**/*.js", "!src/vendor/**"}).
+	Pipe(plugins.Replace("__VERSION__", version)).
+	Pipe(plugins.Concat("bundle.js")).
+	Pipe(gulp.Dest("dist")).
+	Run(ctx)
+```
+
+Nothing touches the filesystem until `Run`, `Collect` or `Each` is called.
+
+### Tasks
+
+A task is a function. Every task receives a context, and cancelling it — with
+Ctrl-C, or because a sibling failed — cancels the build.
+
+```go
+gulp.Task("clean", func(ctx context.Context) error {
+	return os.RemoveAll("dist")
+})
+
+gulp.TaskRef("build", gulp.Series(
+	gulp.Name("clean"),
+	gulp.Parallel(gulp.Names("styles", "scripts")...),
+))
+```
+
+`Series` and `Parallel` compose; names resolve when the task runs, so order of
+registration does not matter.
+
+### Watching
+
+```go
+w, err := gulp.Watch([]string{"src/**/*.css"}, gulp.WatchOptions{}, styles)
+if err != nil {
+	return err
+}
+defer w.Close()
+```
+
+Defaults match gulp: initial events ignored, 200ms debounce, at most one queued
+run, `add`/`change`/`unlink`.
+
+### Incremental builds
+
+```go
+since, ok, _ := gulp.LastRun(gulp.Name("styles"), 0)
+opts := gulp.SrcOptions{}
+if ok {
+	opts.Since = gulp.Value(since)
+}
+gulp.Src([]string{"src/**/*.css"}, opts)
+```
+
+## Plugins
+
+There is no plugin registry. A plugin is a `pipeline.Transform`, which usually
+means a `pipeline.Map`:
+
+```go
+func banner(text string) pipeline.Transform {
+	return pipeline.Map(func(ctx context.Context, f *vinyl.File) (*vinyl.File, error) {
+		body, err := f.Bytes()
+		if err != nil {
+			return nil, err
+		}
+		f.Contents = vinyl.Buffer(append([]byte(text), body...))
+		return f, nil
+	})
+}
+```
+
+For real tooling, `plugins.Exec` wraps any command-line program:
+
+```go
+plugins.Exec(plugins.ExecOptions{
+	Name:    "esbuild",
+	Command: "esbuild",
+	Args:    func(f *vinyl.File) []string { return []string{"--minify", "--loader=js"} },
+	Rename:  func(p *plugins.Path) { p.Basename += ".min" },
+})
+```
+
+Bundled: `Concat`, `Rename`, `Replace`, `Filter`, `If`, `SourcemapsInit`,
+`SourcemapsWrite`, `Exec`.
+
+## CLI
+
+`gulp.Main()` gives your gulpfile gulp's command line.
+
+```
+gulp [options] tasks
+
+  -h, --help           Show this help.
+  -v, --version        Print the global and local gulp versions.
+      --preload        Will preload a module before running the gulpfile.
+  -f, --gulpfile       Manually set path of gulpfile.
+      --cwd            Manually set the CWD.
+  -T, --tasks          Print the task dependency tree for the loaded gulpfile.
+      --tasks-simple   Print a plaintext list of tasks.
+      --tasks-json     Print the task dependency tree, in JSON format.
+      --tasks-depth    Specify the depth of the task dependency tree.
+      --compact-tasks  Reduce the output of task dependency tree.
+      --sort-tasks     Will sort top tasks of task dependency tree.
+      --color          Force colors.
+      --no-color       Force no colors.
+  -S, --silent         Suppress all gulp logging.
+      --continue       Continue execution of tasks upon failure.
+      --series         Run tasks given on the CLI in series.
+  -L, --log-level      Set the loglevel. -L least verbose, -LLLL most.
+```
+
+```
+$ go run . --tasks
+Tasks for ~/project/gulpfile.go
+├── clean    Remove the build directory
+│   --dry    …Report what would be removed
+├── styles   Compile stylesheets
+├─┬ build    Build everything
+│ └─┬ <series>
+│   ├── clean
+│   └─┬ <parallel>
+│     ├── styles
+│     └── scripts
+└─┬ default
+  └─┬ build
+```
+
+Give a task a description and flags so they appear here:
+
+```go
+t := gulp.Task("clean", clean)
+t.Description = "Remove the build directory"
+t.Flags = map[string]string{"--dry": "Report what would be removed"}
+```
+
+## Differences from gulp
+
+The full catalogue is in [MIGRATION.md](MIGRATION.md). The four that matter:
+
+- **npm plugins cannot be used.** Use `plugins.Exec` to call the underlying
+  tool, or write a transform. This is the real cost of the migration.
+- **A task is `func(context.Context) error`**, not one of Node's six async
+  conventions. Adapters live in `internal/asyncdone`.
+- **`Parallel` cancels siblings on the first error.** JavaScript cannot.
+- **`useJunctions` is inert**, because Go cannot select a Windows link type.
 
 ## Documentation
 
-Check out the [Getting Started guide][getting-started-guide] and [API docs][api-docs] on our website!
+- [MIGRATION.md](MIGRATION.md) — what changed and why
+- [docs/api](docs/api) — the gulp API reference, applicable as written
+- [docs/CLI.md](docs/CLI.md) — the gulp CLI reference
 
-__Excuse our dust! All other docs will be behind until we get everything updated. Please open an issue if something isn't working.__
+## Tests
 
-## Sample `gulpfile.js`
-
-This file will give you a taste of what gulp does.
-
-```js
-var gulp = require('gulp');
-var less = require('gulp-less');
-var babel = require('gulp-babel');
-var concat = require('gulp-concat');
-var uglify = require('gulp-uglify');
-var rename = require('gulp-rename');
-var cleanCSS = require('gulp-clean-css');
-var del = require('del');
-
-var paths = {
-  styles: {
-    src: 'src/styles/**/*.less',
-    dest: 'assets/styles/'
-  },
-  scripts: {
-    src: 'src/scripts/**/*.js',
-    dest: 'assets/scripts/'
-  }
-};
-
-/* Not all tasks need to use streams, a gulpfile is just another node program
- * and you can use all packages available on npm, but it must return either a
- * Promise, a Stream or take a callback and call it
- */
-function clean() {
-  // You can use multiple globbing patterns as you would with `gulp.src`,
-  // for example if you are using del 2.0 or above, return its promise
-  return del([ 'assets' ]);
-}
-
-/*
- * Define our tasks using plain functions
- */
-function styles() {
-  return gulp.src(paths.styles.src)
-    .pipe(less())
-    .pipe(cleanCSS())
-    // pass in options to the stream
-    .pipe(rename({
-      basename: 'main',
-      suffix: '.min'
-    }))
-    .pipe(gulp.dest(paths.styles.dest));
-}
-
-function scripts() {
-  return gulp.src(paths.scripts.src, { sourcemaps: true })
-    .pipe(babel())
-    .pipe(uglify())
-    .pipe(concat('main.min.js'))
-    .pipe(gulp.dest(paths.scripts.dest));
-}
-
-function watch() {
-  gulp.watch(paths.scripts.src, scripts);
-  gulp.watch(paths.styles.src, styles);
-}
-
-/*
- * Specify if tasks run in series or parallel using `gulp.series` and `gulp.parallel`
- */
-var build = gulp.series(clean, gulp.parallel(styles, scripts));
-
-/*
- * You can use CommonJS `exports` module notation to declare tasks
- */
-exports.clean = clean;
-exports.styles = styles;
-exports.scripts = scripts;
-exports.watch = watch;
-exports.build = build;
-/*
- * Define default task that can be called by just running `gulp` from cli
- */
-exports.default = build;
+```
+go test ./...
+go test -race ./...
+go test -short ./...   # skips subprocess and filesystem-timing tests
 ```
 
-## Use latest JavaScript version in your gulpfile
+Every gulp test file has a counterpart, and `test/fixtures/` is copied from the
+JavaScript repository unchanged.
 
-Gulp provides a wrapper that will be loaded in your ESM code, so you can name your gulpfile as `gulpfile.mjs` or with `"type": "module"` specified in your `package.json` file.
+## License
 
-And here's the same sample from above written in **ESNext**.
-
-```js
-import { src, dest, watch } from 'gulp';
-import less from 'gulp-less';
-import babel from 'gulp-babel';
-import concat from 'gulp-concat';
-import uglify from 'gulp-uglify';
-import rename from 'gulp-rename';
-import cleanCSS from 'gulp-clean-css';
-import {deleteAsync} from 'del';
-
-const paths = {
-  styles: {
-    src: 'src/styles/**/*.less',
-    dest: 'assets/styles/'
-  },
-  scripts: {
-    src: 'src/scripts/**/*.js',
-    dest: 'assets/scripts/'
-  }
-};
-
-/*
- * For small tasks you can export arrow functions
- */
-export const clean = () => deleteAsync([ 'assets' ]);
-
-/*
- * You can also declare named functions and export them as tasks
- */
-export function styles() {
-  return src(paths.styles.src)
-    .pipe(less())
-    .pipe(cleanCSS())
-    // pass in options to the stream
-    .pipe(rename({
-      basename: 'main',
-      suffix: '.min'
-    }))
-    .pipe(dest(paths.styles.dest));
-}
-
-export function scripts() {
-  return src(paths.scripts.src, { sourcemaps: true })
-    .pipe(babel())
-    .pipe(uglify())
-    .pipe(concat('main.min.js'))
-    .pipe(dest(paths.scripts.dest));
-}
-
- /*
-  * You could even use `export as` to rename exported tasks
-  */
-function watchFiles() {
-  watch(paths.scripts.src, scripts);
-  watch(paths.styles.src, styles);
-}
-export { watchFiles as watch };
-
-const build = gulp.series(clean, gulp.parallel(styles, scripts));
-/*
- * Export a default task
- */
-export default build;
-```
-
-## Incremental Builds
-
-You can filter out unchanged files between runs of a task using
-the `gulp.src` function's `since` option and `gulp.lastRun`:
-```js
-const paths = {
-  ...
-  images: {
-    src: 'src/images/**/*.{jpg,jpeg,png}',
-    dest: 'build/img/'
-  }
-}
-
-function images() {
-  return gulp.src(paths.images.src, {since: gulp.lastRun(images)})
-    .pipe(imagemin())
-    .pipe(gulp.dest(paths.images.dest));
-}
-
-function watch() {
-  gulp.watch(paths.images.src, images);
-}
-```
-Task run times are saved in memory and are lost when gulp exits. It will only
-save time during the `watch` task when running the `images` task
-for a second time.
-
-## Want to contribute?
-
-Anyone can help make this project better - check out our [Contributing guide](/CONTRIBUTING.md)!
-
-<!-- prettier-ignore-start -->
-[quick-start]: https://gulpjs.com/docs/en/getting-started/quick-start
-[getting-started-guide]: https://gulpjs.com/docs/en/getting-started/quick-start
-[api-docs]: https://gulpjs.com/docs/en/api/concepts
-[esm-module]: https://github.com/standard-things/esm
-<!-- prettier-ignore-end -->
-
-<!-- prettier-ignore-start -->
-[downloads-image]: https://img.shields.io/npm/dm/gulp.svg?style=flat-square
-[npm-url]: https://www.npmjs.com/package/gulp
-[npm-image]: https://img.shields.io/npm/v/gulp.svg?style=flat-square
-
-[ci-url]: https://github.com/gulpjs/gulp/actions?query=workflow:dev
-[ci-image]: https://img.shields.io/github/actions/workflow/status/gulpjs/gulp/dev.yml?branch=master&style=flat-square
-
-[coveralls-url]: https://coveralls.io/r/gulpjs/gulp
-[coveralls-image]: https://img.shields.io/coveralls/gulpjs/gulp/master.svg?style=flat-square
-<!-- prettier-ignore-end -->
+MIT, same as gulp. See [LICENSE](LICENSE).

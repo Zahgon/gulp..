@@ -7,86 +7,88 @@ sidebar_label: Quick Start
 
 # Quick Start
 
-If you've previously installed gulp globally, run `npm rm --global gulp` before following these instructions. For more information, read this [Sip][sip-article].
-
-## Check for node, npm, and npx
-```sh
-node --version
-```
-![Output: v8.11.1][img-node-version-command]
-```sh
-npm --version
-```
-![Output: 5.6.0][img-npm-version-command]
-```sh
-npx --version
-```
-![Output: 9.7.1][img-npx-version-command]
-
-If they are not installed, follow the instructions [here][node-install].
-
-## Install the gulp command line utility
-```sh
-npm install --global gulp-cli
-```
-
-
-## Create a project directory and navigate into it
-```sh
-npx mkdirp my-project
-```
-```sh
-cd my-project
-```
-
-## Create a package.json file in your project directory
-```sh
-npm init
-```
-
-This will guide you through giving your project a name, version, description, etc.
-
-## Install the gulp package in your devDependencies
-```sh
-npm install --save-dev gulp
-```
-
-## Verify your gulp versions
+## Check your Go version
 
 ```sh
-gulp --version
+go version
 ```
 
-Ensure the output matches the screenshot below or you might need to restart the steps in this guide.
+Go 1.23 or newer is required. If the command is not found, install Go from
+[go.dev/dl](https://go.dev/dl/).
 
-![Output: CLI version 2.0.1 & Local version 4.0.0][img-gulp-version-command]
+## Create a project
+
+```sh
+mkdir my-project && cd my-project
+go mod init example.com/my-project
+go get github.com/gulpjs/gulp-go
+```
 
 ## Create a gulpfile
-Using your text editor, create a file named gulpfile.js in your project root with these contents:
-```js
-function defaultTask(cb) {
-  // place code for your default task here
-  cb();
+
+Create `gulpfile.go` in the project root:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	gulp "github.com/gulpjs/gulp-go"
+)
+
+func main() {
+	gulp.Task("default", func(ctx context.Context) error {
+		fmt.Println("hello from gulp")
+		return nil
+	})
+
+	gulp.Main()
 }
-
-exports.default = defaultTask
 ```
 
-## Test it
-Run the gulp command in your project directory:
+The file is `package main` and ends in `gulp.Main()`. That is what makes it
+runnable — a gulpfile in Go is an ordinary program, not a manifest that some
+other tool loads.
+
+## Run it
+
 ```sh
-gulp
+go run . default
 ```
-To run multiple tasks, you can use `gulp <task> <othertask>`.
 
-## Result
-The default task will run and do nothing.
-![Output: Starting default & Finished default][img-gulp-command]
+```
+[13:05:29] Using gulpfile ~/my-project/gulpfile.go
+[13:05:29] Starting 'default'...
+hello from gulp
+[13:05:29] Finished 'default' after 37 μs
+```
 
-[sip-article]: https://medium.com/gulpjs/gulp-sips-command-line-interface-e53411d4467
-[node-install]: https://nodejs.org/en/
-[img-node-version-command]: https://gulpjs.com/img/docs-node-version-command.png
-[img-npm-version-command]: https://gulpjs.com/img/docs-npm-version-command.png
-[img-npx-version-command]: https://gulpjs.com/img/docs-npx-version-command.png
-[img-gulp-version-command]: https://gulpjs.com/img/docs-gulp-version-command.png
-[img-gulp-command]: https://gulpjs.com/img/docs-gulp-command.png
+Because `default` is the task gulp runs when you name none, `go run .` on its
+own does the same thing.
+
+## Install the launcher (optional)
+
+If you would rather type `gulp` than `go run .`:
+
+```sh
+go install github.com/gulpjs/gulp-go/cmd/gulp@latest
+```
+
+```sh
+gulp            # same as: go run .
+gulp default    # same as: go run . default
+```
+
+The launcher searches upward from the current directory for `gulpfile.go`,
+`Gulpfile.go` or `gulpfile/main.go`, then runs `go run .` in that package's
+directory with your arguments forwarded. It is a convenience, nothing more —
+every example in these docs works with plain `go run .`.
+
+## Next
+
+Continue to [Go and Gulpfiles][go-and-gulpfiles] to see how a real build is
+laid out.
+
+[go-and-gulpfiles]: 2-go-and-gulpfiles.md

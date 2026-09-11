@@ -1,38 +1,124 @@
-# Incremental rebuilding, including operating on full file sets
+<!-- front-matter
+name: Incremental builds with concatenation
+-->
 
-The trouble with incremental rebuilds is you often want to operate on _all_ processed files, not just single files. For example, you may want to lint and module-wrap just the file(s) that have changed, then concatenate it with all other linted and module-wrapped files. This is difficult without the use of temp files.
+# Incremental builds with concatenation
 
-Use [gulp-cached](https://github.com/wearefractal/gulp-cached) and [gulp-remember](https://github.com/ahaurw01/gulp-remember) to achieve this.
+Reading only the files that changed is easy. The catch is that concatenation
+needs *every* file, not just the changed ones — so a naive incremental build
+produces a bundle containing one file.
 
-```js
-var gulp = require('gulp');
-var header = require('gulp-header');
-var footer = require('gulp-footer');
-var concat = require('gulp-concat');
-var jshint = require('gulp-jshint');
-var cached = require('gulp-cached');
-var remember = require('gulp-remember');
+## The problem
 
-var scriptsGlob = 'src/**/*.js';
-
-gulp.task('scripts', function() {
-  return gulp.src(scriptsGlob)
-      .pipe(cached('scripts'))        // only pass through changed files
-      .pipe(jshint())                 // do special things to the changed files...
-      .pipe(header('(function () {')) // e.g. jshinting ^^^
-      .pipe(footer('})();'))          // and some kind of module wrapping
-      .pipe(remember('scripts'))      // add back all files to the stream
-      .pipe(concat('app.js'))         // do things that require all files
-      .pipe(gulp.dest('public/'));
-});
-
-gulp.task('watch', function () {
-  var watcher = gulp.watch(scriptsGlob, gulp.series('scripts')); // watch the same files in our scripts task
-  watcher.on('change', function (event) {
-    if (event.type === 'deleted') {                   // if a file is deleted, forget about it
-      delete cached.caches.scripts[event.path];       // gulp-cached remove api
-      remember.forget('scripts', event.path);         // gulp-remember remove api
-    }
-  });
-});
+```go
+// Wrong: after the first run this concatenates only the changed files.
+func scripts(ctx context.Context) error {
+	since, ok, _ := gulp.LastRun(gulp.Name("scripts"), 0)
+	opts := gulp.SrcOptions{}
+	if ok {
+		opts.Since = gulp.Value(since)
+	}
+	return gulp.Src([]string{"src/**/*.js"}, opts).
+		Pipe(plugins.Concat("bundle.js")).
+		Pipe(gulp.Dest("dist")).
+		Run(ctx)
+}
 ```
+
+## Cache the transformed files
+
+Do the expensive per-file work incrementally, then concatenate a cache that
+holds every file. The cache survives between runs because the gulpfile process
+stays alive while watching.
+
+```go
+type cache struct {
+	mu    sync.Mutex
+	files map[string]*gulp.File
+}
+
+func (c *cache) put(f *gulp.File) error {
+	rel, err := f.Relative()
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.files[rel] = f.Clone()
+	return nil
+}
+
+func (c *cache) all() []*gulp.File {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	keys := slices.Sorted(maps.Keys(c.files))
+	out := make([]*gulp.File, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, c.files[k].Clone())
+	}
+	return out
+}
+```
+
+Sorting the keys matters: without it the bundle's contents would depend on Go's
+randomised map iteration order, and every run would produce a different file.
+
+```go
+var scriptCache = &cache{files: map[string]*gulp.File{}}
+
+func scripts(ctx context.Context) error {
+	since, ok, _ := gulp.LastRun(gulp.Name("scripts"), 0)
+	opts := gulp.SrcOptions{}
+	if ok {
+		opts.Since = gulp.Value(since)
+	}
+
+	// Transform only what changed, and record the result.
+	err := gulp.Src([]string{"src/**/*.js"}, opts).
+		Pipe(transpile()).
+		Pipe(pipeline.Tap(scriptCache.put)).
+		Run(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Concatenate everything seen so far.
+	return pipeline.New(pipeline.From(scriptCache.all()...)).
+		Pipe(plugins.Concat("bundle.js")).
+		Pipe(gulp.Dest("dist")).
+		Run(ctx)
+}
+```
+
+Note the `Clone()` calls on the way in and out of the cache. Without them, a
+later stage that replaces `Contents` would mutate the cached file, and the next
+bundle would pick up the change.
+
+## Removing deleted files
+
+`Since` never reports a deletion, so watch for `unlink` and drop the entry:
+
+```go
+w, err := gulp.Watch([]string{"src/**/*.js"}, gulp.WatchOptions{}, gulp.Name("scripts").Fn)
+if err != nil {
+	return err
+}
+defer w.Close()
+
+w.On(watch.EventUnlink, func(path string) {
+	scriptCache.mu.Lock()
+	delete(scriptCache.files, path)
+	scriptCache.mu.Unlock()
+})
+```
+
+## Simpler: do not bother
+
+Concatenation is fast. Reading a few hundred files and joining them costs a few
+milliseconds, and the cache above costs correctness risk. Use `Since` for the
+expensive stage — transpiling, minifying, image processing — and read
+everything for the cheap one.
+
+[last-run]: ../api/last-run.md
+[src]: ../api/src.md

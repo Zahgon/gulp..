@@ -1,53 +1,60 @@
-<!-- front-matter
-id: for-enterprise
-title: For enterprise
-hide_title: true
-sidebar_label: For Enterprise
+<!--
+name: for-enterprise
+title: gulp for enterprise
 -->
 
-# Gulp for enterprise
+# gulp for enterprise
 
-Available as part of the Tidelift Subscription.
+## Available as part of the Tidelift Subscription
 
-Tidelift is working with the maintainers of Gulp and thousands of other
-open source projects to deliver commercial support and maintenance for the open source dependencies you use to build your applications. Save time, reduce risk, and improve code health, while paying the maintainers of the exact dependencies you use.
+The maintainers of gulp and thousands of other packages are working with Tidelift to deliver commercial support and maintenance for the open source dependencies you use to build your applications. Save time, reduce risk, and improve code health, while paying the maintainers of the exact dependencies you use.
 
-<a className="tidelift-button" href="https://tidelift.com/subscription/pkg/npm-gulp?utm_source=npm-gulp&utm_medium=referral&utm_campaign=enterprise">Learn more</a>
+[Learn more.](https://tidelift.com/subscription/pkg/npm-gulp?utm_source=npm-gulp&utm_medium=referral&utm_campaign=enterprise)
 
-<a className="tidelift-button" href="https://tidelift.com/subscription/request-a-demo?utm_source=npm-gulp&utm_medium=referral&utm_campaign=enterprise">Request a demo</a>
+> [!NOTE]
+> That subscription covers the **JavaScript** gulp packages on npm. This Go port is an independent reimplementation and is not part of it. If you are evaluating the port for production use, the relevant questions are answered below.
 
-## Enterprise-ready open source software—managed for you
+## Is this port supported?
 
-The Tidelift Subscription is a managed open source subscription for application dependencies covering millions of open source projects across JavaScript, Python, Java, PHP, Ruby, .NET, and more.
+It is maintained on a best-effort basis and carries no commercial support agreement. Treat it the way you would treat any other unpaid open source dependency: read the code, run the tests, and pin a version.
 
-Your subscription includes:
+## How is correctness established?
 
-* **Security updates**
+Three layers, all of which run in CI:
 
-  Tidelift’s security response team coordinates patches for new breaking security vulnerabilities and alerts immediately through a private channel, so your software supply chain is always secure.
+1. **Unit tests** per package, run with `-race`.
+2. **Ported gulp tests** — every case from gulp's own `test/index.test.js`, `test/src.js`, `test/dest.js` and `test/watch.js` has a Go counterpart, listed in [MIGRATION.md][migration].
+3. **Differential tests** — a suite that runs the real JavaScript gulp 5.0.1 in a Node subprocess and compares its output against the Go port byte for byte: `src` contents and emission order across eight glob shapes, the full `dest` output tree, the task tree JSON, and `--tasks-simple`.
 
-* **Licensing verification and indemnification**
+To reproduce the third layer yourself:
 
-  Tidelift verifies license information to enable easy policy enforcement and adds intellectual property indemnification to cover creators and users in case something goes wrong. You always have a 100% up-to-date bill of materials for your dependencies to share with your legal team, customers, or partners.
+```sh
+npm install gulp@5.0.1 --prefix /tmp/gulp-js
+GULP_JS_REPO=/tmp/gulp-js/node_modules/gulp go test -run Differential -v .
+```
 
-* **Maintenance and code improvement**
+## What is the dependency footprint?
 
-  Tidelift ensures the software you rely on keeps working as long as you need it to work. Your managed dependencies are actively maintained and we recruit additional maintainers where required.
+Four direct dependencies, all widely used and permissively licensed:
 
-* **Package selection and version guidance**
+| Module | Purpose |
+|:------|:--------|
+| `github.com/bmatcuk/doublestar/v4` | glob matching |
+| `github.com/fsnotify/fsnotify` | filesystem notifications |
+| `golang.org/x/sys` | `futimes` for metadata sync |
+| `golang.org/x/text` | encoding and display width |
 
-  We help you choose the best open source packages from the start—and then guide you through updates to stay on the best releases as new issues arise.
+There is no plugin ecosystem to audit, because there are no plugins to install. Build tools are invoked as subprocesses through [`plugins.Exec`][exec], so `esbuild` or `sass` remains whatever you already vendored, under whatever policy you already apply to it.
 
-* **Roadmap input**
+## What is the license?
 
-  Take a seat at the table with the creators behind the software you use. Tidelift’s participating maintainers earn more income as their software is used by more subscribers, so they’re interested in knowing what you need.
+MIT, the same as gulp. See [LICENSE][license].
 
-* **Tooling and cloud integration**
+## How do I report a security issue?
 
-  Tidelift works with GitHub, GitLab, BitBucket, and more. We support every cloud platform (and other deployment targets, too).
+See [SECURITY.md][security].
 
-The end result? All of the capabilities you expect from commercial-grade software, for the full breadth of open source you use. That means less time grappling with esoteric open source trivia, and more time building your own applications—and your business.
-
-<a className="tidelift-button" href="https://tidelift.com/subscription/pkg/npm-gulp?utm_source=npm-gulp&utm_medium=referral&utm_campaign=enterprise">Learn more</a>
-
-<a className="tidelift-button" href="https://tidelift.com/subscription/request-a-demo?utm_source=npm-gulp&utm_medium=referral&utm_campaign=enterprise">Request a demo</a>
+[migration]: ../../MIGRATION.md
+[license]: ../../LICENSE
+[security]: ../../.github/SECURITY.md
+[exec]: https://pkg.go.dev/github.com/gulpjs/gulp-go/plugins#Exec

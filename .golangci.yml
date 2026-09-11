@@ -1,0 +1,50 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - revive
+    - gocritic
+    - ineffassign
+    - unused
+    - misspell
+    - unconvert
+    - bodyclose
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+        - name: package-comments
+        - name: var-naming
+          arguments:
+            - ["BOM", "CLI", "CWD", "JSON", "URI", "URL", "UTF"]
+            - []
+
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - gocritic
+          - errcheck
+
+      # Metadata syncing in dest() and symlink() is best-effort by design.
+      # vinyl-fs guards these calls with an isOwner() check and swallows the
+      # failure; a build must not die because it copied a file it cannot chmod.
+      - path: vfs/(dest|symlink)\.go$
+        linters:
+          - errcheck
+
+      # gulp's error strings are reproduced verbatim so that scripts grepping
+      # gulp output keep working. Several start with a capital letter, which
+      # staticcheck's ST1005 rejects.
+      - text: "error strings should not be capitalized"
+        linters:
+          - staticcheck
+
+formatters:
+  enable:
+    - gofmt

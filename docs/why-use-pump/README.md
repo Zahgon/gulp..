@@ -1,122 +1,101 @@
+<!-- front-matter
+id: why-use-pump
+title: Why Use Pump?
+hide_title: true
+sidebar_label: Why Use Pump?
+-->
+
 # Why Use Pump?
 
-When using `pipe` from the Node.js streams, errors are not propagated forward
-through the piped streams, and source streams aren’t closed if a destination
-stream closed. The [`pump`][pump] module normalizes these problems and passes
-you the errors in a callback.
+In JavaScript gulp this page explains why you should wrap `.pipe()` chains in
+the [`pump`][pump] module. **You do not need pump in Go.** This page explains
+what pump solved, and why the `pipeline` package already solves it.
 
-## A common gulpfile example
+## The problem pump solved
 
-A common pattern in gulp files is to simply return a Node.js stream, and expect
-the gulp tool to handle errors.
+Node's `.pipe()` does not forward errors. Given this chain:
 
-```javascript
-// example of a common gulpfile
-var gulp = require('gulp');
-var uglify = require('gulp-uglify');
-
-gulp.task('compress', function () {
-  // returns a Node.js stream, but no handling of error messages
-  return gulp.src('lib/*.js')
-    .pipe(uglify())
-    .pipe(gulp.dest('dist'));
-});
+```js
+gulp.src('*.js')
+  .pipe(uglify())
+  .pipe(gulp.dest('build'));
 ```
 
-![pipe error](pipe-error.png)
+if `uglify()` emits an error, `.pipe()` does not pass it to `gulp.dest()`, and
+it does not tear down the stream it was reading from. The result is the failure
+mode every gulp user has met at least once: the build prints an unhandled
+`'error'` event, or worse, prints nothing and hangs, because the source stream
+is still open and waiting for a consumer that has already given up.
 
-There’s an error in one of the JavaScript files, but that error message is the
-opposite of helpful. You want to know what file and line contains the error. So
-what is this mess?
+`pump` fixed this by wiring every stream's error and close handlers together, so
+one failure destroys the whole chain and reports a single error.
 
-When there’s an error in a stream, the Node.js stream fire the 'error' event,
-but if there’s no handler for this event, it instead goes to the defined
-[uncaught exception][uncaughtException] handler. The default behavior of the
-uncaught exception handler is documented:
+## Why Go does not have the problem
 
-> By default, Node.js handles such exceptions by printing the stack trace to
-> stderr and exiting.
+A `Pipeline` is not a chain of independent objects that happen to be connected.
+It is a single unit that the runner starts, supervises and tears down together.
+Three properties fall out of that.
 
-## Handling the Errors
+**Errors propagate.** Each stage runs in its own goroutine. When one returns an
+error, the runner cancels a context shared by every other stage and delivers
+that error to whoever called the terminal method. There is no path by which an
+error is emitted but not observed.
 
-Since allowing the errors to make it to the uncaught exception handler isn’t
-useful, we should handle the exceptions properly. Let’s give that a quick shot.
-
-```javascript
-var gulp = require('gulp');
-var uglify = require('gulp-uglify');
-
-gulp.task('compress', function () {
-  return gulp.src('lib/*.js')
-    .pipe(uglify())
-    .pipe(gulp.dest('dist'))
-    .on('error', function(err) {
-      console.error('Error in compress task', err.toString());
-    });
-});
+```go
+files, err := gulp.Src([]string{"src/**/*.js"}).
+    Pipe(minify()).
+    Pipe(gulp.Dest("build")).
+    Collect(ctx)
 ```
 
-Unfortunately, Node.js stream’s `pipe` function doesn’t forward errors through
-the chain, so this error handler only handles the errors given by
-`gulp.dest`. Instead we need to handle errors for each stream.
+If `minify()` fails, `err` is non-nil. You cannot forget to handle it — Go's
+compiler and vet both complain about a discarded error, whereas an unhandled
+`'error'` event is invisible until runtime.
 
-```javascript
-var gulp = require('gulp');
-var uglify = require('gulp-uglify');
+**Errors are attributed.** The runner wraps a stage failure with its position,
+so the message reads `pipeline stage 2: ...` rather than leaving you to guess
+which link in a ten-stage chain broke.
 
-gulp.task('compress', function () {
-  function createErrorHandler(name) {
-    return function (err) {
-      console.error('Error from ' + name + ' in compress task', err.toString());
-    };
-  }
+**Nothing leaks.** Every stage closes its output channel on the way out, and
+drains its input afterwards, so a stage that stops early cannot wedge the one
+feeding it. Cancelling the context — which the runner does automatically on the
+first error, and which you can do yourself — unblocks every stage. A failed
+build exits; it does not hang.
 
-  return gulp.src('lib/*.js')
-    .on('error', createErrorHandler('gulp.src'))
-    .pipe(uglify())
-    .on('error', createErrorHandler('uglify'))
-    .pipe(gulp.dest('dist'))
-    .on('error', createErrorHandler('gulp.dest'));
-});
+A panic is treated the same way as an error. The runner recovers it, converts it
+to an error carrying the panic value, and cancels the rest of the pipeline. A
+panicking transform takes down the build with a usable message rather than the
+whole process.
+
+## What this means in practice
+
+Write the chain directly and check the error:
+
+```go
+func scripts(ctx context.Context) error {
+	return gulp.Src([]string{"src/**/*.js"}).
+		Pipe(plugins.Concat("bundle.js")).
+		Pipe(gulp.Dest("build")).
+		Run(ctx)
+}
 ```
 
-This is a lot of complexity to add in each of your gulp tasks, and it’s easy to
-forget to do it. In addition, it’s still not perfect, as it doesn’t properly
-signal to gulp’s task system that the task has failed. We can fix this, and we
-can handle the other pesky issues with error propogations with streams, but it’s
-even more work!
+Returning the error is enough. The CLI logs it in red, marks the task failed,
+skips recording it for [`LastRun`][last-run], and exits non-zero.
 
-## Using pump
+There is no `pump` equivalent to import, no `.on('error', ...)` to remember, and
+no combined-stream helper to reach for. The behaviour pump gave you is the
+default.
 
-The [`pump`][pump] module is a cheat code of sorts. It’s a wrapper around the
-`pipe` functionality that handles these cases for you, so you can stop hacking
-on your gulpfiles, and get back to hacking new features into your app.
+## Related
 
-```javascript
-var gulp = require('gulp');
-var uglify = require('gulp-uglify');
-var pump = require('pump');
-
-gulp.task('compress', function (cb) {
-  pump([
-      gulp.src('lib/*.js'),
-      uglify(),
-      gulp.dest('dist')
-    ],
-    cb
-  );
-});
-```
-
-The gulp task system provides a gulp task with a callback, which can signal
-successful task completion (being called with no arguments), or a task failure
-(being called with an Error argument). Fortunately, this is the exact same
-format `pump` uses!
-
-![pump error](pump-error.png)
-
-Now it’s very clear what plugin the error was from, what the error actually was,
-and from what file and line number.
+- [`pipeline` package reference][pipeline] — the `Transform` contract, and the
+  rule that a stage must never close its output channel.
+- [Async completion][async] — how task errors reach the CLI.
+- [Writing a plugin][plugin] — building transforms that fail cleanly.
 
 [pump]: https://github.com/mafintosh/pump
-[uncaughtException]: https://nodejs.org/api/process.html#process_event_uncaughtexception
+[pipeline]: https://pkg.go.dev/github.com/gulpjs/gulp-go/pipeline
+[async]: ../getting-started/4-async-completion.md
+[plugin]: ../writing-a-plugin/README.md
+[last-run]: ../api/last-run.md

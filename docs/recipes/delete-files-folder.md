@@ -1,84 +1,65 @@
+<!-- front-matter
+name: Delete files and folders
+-->
+
 # Delete files and folders
 
-You might want to delete some files before running your build. Since deleting files doesn't work on the file contents, there's no reason to use a gulp plugin. An excellent opportunity to use a vanilla node module.
+There is no plugin for this, and there does not need to be. A task is an
+ordinary Go function, so deleting a directory is one call to `os.RemoveAll`.
 
-Let's use the [`del`](https://github.com/sindresorhus/del) module for this example as it supports multiple files and [globbing](https://github.com/sindresorhus/multimatch#globbing-patterns):
-
-```sh
-$ npm install --save-dev gulp del
+```go
+func clean(ctx context.Context) error {
+	return os.RemoveAll("dist")
+}
 ```
 
-Imagine the following file structure:
+`os.RemoveAll` returns `nil` when the path is already gone, so a clean task is
+safe to run on a fresh checkout.
 
-```
-.
-├── dist
-│   ├── report.csv
-│   ├── desktop
-│   └── mobile
-│       ├── app.js
-│       ├── deploy.json
-│       └── index.html
-└── src
-```
+## Deleting a glob
 
-In the gulpfile we want to clean out the contents of the `mobile` folder before running our build:
+To delete a matched set rather than a whole tree, run a pipeline that reads
+nothing and removes each path it is given:
 
-```js
-var gulp = require('gulp');
-var del = require('del');
-
-gulp.task('clean:mobile', function () {
-  return del([
-    'dist/report.csv',
-    // here we use a globbing pattern to match everything inside the `mobile` folder
-    'dist/mobile/**/*',
-    // we don't want to clean this file though so we negate the pattern
-    '!dist/mobile/deploy.json'
-  ]);
-});
-
-gulp.task('default', gulp.series('clean:mobile'));
+```go
+func cleanMaps(ctx context.Context) error {
+	return gulp.Src([]string{"dist/**/*.map"}, gulp.SrcOptions{
+		Read:       gulp.Value(false),
+		AllowEmpty: true,
+	}).Pipe(pipeline.Tap(func(f *gulp.File) error {
+		return os.Remove(f.Path())
+	})).Run(ctx)
+}
 ```
 
+`Read: gulp.Value(false)` skips reading contents, which matters when the files
+are large. `AllowEmpty: true` stops the pipeline erroring when the glob matches
+nothing, which is the normal case on a clean tree.
 
-## Delete files in a pipeline
+## Do not delete outside the project
 
-You might want to delete some files after processing them in a pipeline.
+`gulp.Src` resolves globs against the working directory, and a stray `../`
+in a glob will happily match files above it. If the paths come from anywhere
+but a literal in your gulpfile, check them first:
 
-We'll use [vinyl-paths](https://github.com/sindresorhus/vinyl-paths) to easily get the file path of files in the stream and pass it to the `del` method.
-
-```sh
-$ npm install --save-dev gulp del vinyl-paths
+```go
+root, err := os.Getwd()
+if err != nil {
+	return err
+}
+if rel, err := filepath.Rel(root, f.Path()); err != nil || strings.HasPrefix(rel, "..") {
+	return fmt.Errorf("refusing to delete outside the project: %s", f.Path())
+}
 ```
 
-Imagine the following file structure:
+## Ordering
 
-```
-.
-├── tmp
-│   ├── rainbow.js
-│   └── unicorn.js
-└── dist
-```
+Deletion almost always belongs first in a series, so that the rest of the build
+writes into a clean tree:
 
-```js
-var gulp = require('gulp');
-var stripDebug = require('gulp-strip-debug'); // only as an example
-var del = require('del');
-var vinylPaths = require('vinyl-paths');
-
-gulp.task('clean:tmp', function () {
-  return gulp.src('tmp/*')
-    .pipe(vinylPaths(del))
-    .pipe(stripDebug())
-    .pipe(gulp.dest('dist'));
-});
-
-gulp.task('default', gulp.series('clean:tmp'));
+```go
+gulp.TaskRef("build", gulp.Series(gulp.Names("clean", "styles", "scripts")...))
 ```
 
-This will only delete the tmp dir.
-
-
-Only do this if you're already using other plugins in the pipeline, otherwise just use the module directly as `gulp.src` is costly.
+[src]: ../api/src.md
+[series]: ../api/series.md

@@ -1,0 +1,95 @@
+{
+  "gulp_version": "5.0.1",
+  "src": {
+    "deep glob": [
+      {
+        "relative": "test/run.jade",
+        "contents": "dGVzdCB0ZW1wbGF0ZQ==",
+        "dir": false,
+        "null": false
+      }
+    ],
+    "deeper glob": [
+      {
+        "relative": "stuff/run.dmc",
+        "contents": "",
+        "dir": false,
+        "null": false
+      },
+      {
+        "relative": "stuff/test.dmc",
+        "contents": "",
+        "dir": false,
+        "null": false
+      }
+    ],
+    "directory": [
+      {
+        "relative": "stuff",
+        "contents": "",
+        "dir": true,
+        "null": true
+      }
+    ],
+    "flat glob": [
+      {
+        "relative": "test.coffee",
+        "contents": "dGhpcyBpcyBhIHRlc3Q=",
+        "dir": false,
+        "null": false
+      }
+    ],
+    "multiple globs in order": [
+      {
+        "relative": "run.dmc",
+        "contents": "",
+        "dir": false,
+        "null": false
+      },
+      {
+        "relative": "test.dmc",
+        "contents": "",
+        "dir": false,
+        "null": false
+      }
+    ],
+    "negation": [
+      {
+        "relative": "run.dmc",
+        "contents": "",
+        "dir": false,
+        "null": false
+      }
+    ],
+    "read disabled": [
+      {
+        "relative": "test.coffee",
+        "contents": "",
+        "dir": false,
+        "null": true
+      }
+    ],
+    "text files": [
+      {
+        "relative": "copy/example.txt",
+        "contents": "dGhpcyBpcyBhIHRlc3Q=",
+        "dir": false,
+        "null": false
+      }
+    ]
+  },
+  "dest": {
+    "txt and dmc": {
+      "copy/": "",
+      "copy/example.txt": "this is a test",
+      "stuff/": "",
+      "stuff/run.dmc": "",
+      "stuff/test.dmc": ""
+    }
+  },
+  "text": {
+    "tasks-simple": "clean\nstyles\nbuild\n",
+    "tree": "{\"label\":\"Tasks\",\"nodes\":[{\"label\":\"one\",\"type\":\"task\",\"nodes\":[]},{\"label\":\"two\",\"type\":\"task\",\"nodes\":[]},{\"label\":\"three\",\"type\":\"task\",\"nodes\":[{\"label\":\"\u003cseries\u003e\",\"type\":\"function\",\"branch\":true,\"nodes\":[{\"label\":\"one\",\"type\":\"task\",\"nodes\":[]},{\"label\":\"two\",\"type\":\"task\",\"nodes\":[]}]}]},{\"label\":\"four\",\"type\":\"task\",\"nodes\":[{\"label\":\"\u003cparallel\u003e\",\"type\":\"function\",\"branch\":true,\"nodes\":[{\"label\":\"one\",\"type\":\"task\",\"nodes\":[]},{\"label\":\"\u003cseries\u003e\",\"type\":\"function\",\"branch\":true,\"nodes\":[{\"label\":\"two\",\"type\":\"task\",\"nodes\":[]}]}]}]}]}\n",
+    "tree-json": "{\"label\":\"Tasks\",\"nodes\":[\"clean\",\"styles\",\"build\"]}\n{\"label\":\"Tasks\",\"nodes\":[{\"label\":\"clean\",\"type\":\"task\",\"nodes\":[]},{\"label\":\"styles\",\"type\":\"task\",\"nodes\":[]},{\"label\":\"build\",\"type\":\"task\",\"nodes\":[{\"label\":\"\u003cseries\u003e\",\"type\":\"function\",\"branch\":true,\"nodes\":[{\"label\":\"clean\",\"type\":\"task\",\"nodes\":[]},{\"label\":\"styles\",\"type\":\"task\",\"nodes\":[]}]}]}]}\n"
+  }
+}

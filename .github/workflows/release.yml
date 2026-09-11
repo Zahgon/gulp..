@@ -1,16 +1,32 @@
 name: release
+
 on:
   push:
-    branches:
-      - master
-      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
-  release-please:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - uses: GoogleCloudPlatform/release-please-action@v2
+      - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          release-type: node
-          package-name: release-please-action
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Verify the tag builds and tests clean
+        run: |
+          go build ./...
+          go test ./...
+
+      - name: Publish the GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -7,209 +7,125 @@ sidebar_label: Creating Tasks
 
 # Creating Tasks
 
-Each gulp task is an asynchronous JavaScript function - a function that accepts an error-first callback or returns a stream, promise, event emitter, child process, or observable ([more on that later][async-completion-docs]). Due to some platform limitations, synchronous tasks aren't supported, though there is a pretty nifty [alternative][using-async-await-docs].
+Every task is a `func(context.Context) error`. That is the whole contract.
 
-## Exporting
-
-Tasks can be considered **public** or **private**.
-
-* **Public tasks** are exported from your gulpfile, which allows them to be run by the `gulp` command.
-* **Private tasks** are made to be used internally, usually used as part of `series()` or `parallel()` composition.
-
-A private task looks and acts like any other task, but an end-user can't ever execute it independently. To register a task publicly, export it from your gulpfile.
-
-```js
-const { series } = require('gulp');
-
-// The `clean` function is not exported so it can be considered a private task.
-// It can still be used within the `series()` composition.
-function clean(cb) {
-  // body omitted
-  cb();
-}
-
-// The `build` function is exported so it is public and can be run with the `gulp` command.
-// It can also be used within the `series()` composition.
-function build(cb) {
-  // body omitted
-  cb();
-}
-
-exports.build = build;
-exports.default = series(clean, build);
-```
-
-![ALT TEXT MISSING][img-gulp-tasks-command]
-
-<small>In the past, `task()` was used to register your functions as tasks. While that API is still available, exporting should be the primary registration mechanism, except in edge cases where exports won't work.</small>
-
-## Compose tasks
-
-Gulp provides two powerful composition methods, `series()` and `parallel()`, allowing individual tasks to be composed into larger operations. Both methods accept any number of task functions or composed operations.  `series()` and `parallel()` can be nested within themselves or each other to any depth.
-
-To have your tasks execute in order, use the `series()` method.
-```js
-const { series } = require('gulp');
-
-function transpile(cb) {
-  // body omitted
-  cb();
-}
-
-function bundle(cb) {
-  // body omitted
-  cb();
-}
-
-exports.build = series(transpile, bundle);
-```
-
-For tasks to run at maximum concurrency, combine them with the `parallel()` method.
-```js
-const { parallel } = require('gulp');
-
-function javascript(cb) {
-  // body omitted
-  cb();
-}
-
-function css(cb) {
-  // body omitted
-  cb();
-}
-
-exports.build = parallel(javascript, css);
-```
-
-Tasks are composed immediately when either `series()` or `parallel()` is called.  This allows variation in the composition instead of conditional behavior inside individual tasks.
-
-```js
-const { series } = require('gulp');
-
-function minify(cb) {
-  // body omitted
-  cb();
-}
-
-
-function transpile(cb) {
-  // body omitted
-  cb();
-}
-
-function livereload(cb) {
-  // body omitted
-  cb();
-}
-
-if (process.env.NODE_ENV === 'production') {
-  exports.build = series(transpile, minify);
-} else {
-  exports.build = series(transpile, livereload);
+```go
+func clean(ctx context.Context) error {
+	return os.RemoveAll("dist")
 }
 ```
 
-`series()` and `parallel()` can be nested to any arbitrary depth.
+## Exporting a task
 
-```js
-const { series, parallel } = require('gulp');
+A task becomes runnable from the command line when you register it by name:
 
-function clean(cb) {
-  // body omitted
-  cb();
-}
-
-function cssTranspile(cb) {
-  // body omitted
-  cb();
-}
-
-function cssMinify(cb) {
-  // body omitted
-  cb();
-}
-
-function jsTranspile(cb) {
-  // body omitted
-  cb();
-}
-
-function jsBundle(cb) {
-  // body omitted
-  cb();
-}
-
-function jsMinify(cb) {
-  // body omitted
-  cb();
-}
-
-function publish(cb) {
-  // body omitted
-  cb();
-}
-
-exports.build = series(
-  clean,
-  parallel(
-    cssTranspile,
-    series(jsTranspile, jsBundle)
-  ),
-  parallel(cssMinify, jsMinify),
-  publish
-);
+```go
+gulp.Task("clean", clean)
 ```
 
-When a composed operation is run, each task will be executed every time it was referenced.  For example, a `clean` task referenced before two different tasks would be run twice and lead to undesired results.  Instead, refactor the `clean` task to be specified in the final composition.
-
-If you have code like this:
-
-```js
-// This is INCORRECT
-const { series, parallel } = require('gulp');
-
-const clean = function(cb) {
-  // body omitted
-  cb();
-};
-
-const css = series(clean, function(cb) {
-  // body omitted
-  cb();
-});
-
-const javascript = series(clean, function(cb) {
-  // body omitted
-  cb();
-});
-
-exports.build = parallel(css, javascript);
+```sh
+gulp clean
 ```
 
-Migrate to this:
+Registering the same name twice replaces the earlier task, exactly as it does
+in JavaScript.
 
-```js
-const { series, parallel } = require('gulp');
+## Public and private tasks
 
-function clean(cb) {
-  // body omitted
-  cb();
+A **public** task is registered and appears in `gulp --tasks`. A **private**
+task is an ordinary Go function that is only referenced by a composition —
+never registered, never listed, but still perfectly usable.
+
+```go
+func compile(ctx context.Context) error { /* ... */ }   // private
+func minify(ctx context.Context) error  { /* ... */ }   // private
+
+func main() {
+	build := gulp.Series(
+		gulp.Anonymous(compile),
+		gulp.Anonymous(minify),
+	)
+	gulp.TaskRef("build", build)   // public
+	gulp.Main()
 }
-
-function css(cb) {
-  // body omitted
-  cb();
-}
-
-function javascript(cb) {
-  // body omitted
-  cb();
-}
-
-exports.build = series(clean, parallel(css, javascript));
 ```
 
-[async-completion-docs]: ../getting-started/4-async-completion.md
-[using-async-await-docs]: ../getting-started/4-async-completion.md#using-async-await
-[img-gulp-tasks-command]: https://gulpjs.com/img/docs-gulp-tasks-command.png
-[async-once]: https://github.com/gulpjs/async-once
+`gulp.Anonymous` wraps a bare function so a composition can hold it. Such a
+task is reported as `<anonymous>` in the tree. To give it a nicer label without
+registering it, use `gulp.Fn("compile", compile)`.
+
+## Composing tasks
+
+`Series` runs tasks one after another, stopping at the first error.
+`Parallel` runs them at the same time.
+
+```go
+build := gulp.Series(
+	gulp.Name("clean"),
+	gulp.Parallel(gulp.Names("styles", "scripts")...),
+)
+gulp.TaskRef("build", build)
+```
+
+Both take `Ref` values, which is either a name (`gulp.Name`, `gulp.Names`) or a
+task itself. Names are resolved when the composition *runs*, not when it is
+built, so you can refer to a task registered later in the file.
+
+Both return a `*undertaker.Task`. Register it with `TaskRef`, or take its `Fn`
+field to get a plain `TaskFunc`:
+
+```go
+gulp.Task("build", gulp.Series(gulp.Names("clean", "compile")...).Fn)
+```
+
+Prefer `TaskRef` when you want `gulp --tasks` to show the structure underneath
+the name; use `.Fn` when you just want the behaviour.
+
+Compositions nest to any depth, and a composition is itself a task, so it can
+appear inside another one.
+
+> `Parallel` cancels its remaining siblings when one of them fails. The
+> JavaScript implementation cannot do this and lets every branch run to
+> completion. See [MIGRATION.md](../../MIGRATION.md) §4.3, and use
+> `--continue` on the command line when you want the JavaScript behaviour.
+
+## The default task
+
+The task named `default` is what runs when you name none:
+
+```go
+gulp.TaskRef("default", gulp.Series(gulp.Name("build")))
+```
+
+Running `gulp` with no `default` registered is an error.
+
+## Descriptions and flags
+
+Registration returns the stored task, so you can annotate it for `--tasks`:
+
+```go
+clean := gulp.Task("clean", cleanFn)
+clean.Description = "Remove the build directory"
+clean.Flags = map[string]string{
+	"--dry": "Report what would be removed",
+}
+```
+
+```
+├── clean    Remove the build directory
+│   --dry    …Report what would be removed
+```
+
+## Listing tasks
+
+```sh
+gulp --tasks          # the tree, with descriptions
+gulp --tasks-simple   # plain list, one name per line
+gulp --tasks-json     # machine-readable
+```
+
+## Next
+
+Continue to [Async Completion][async-completion].
+
+[async-completion]: 4-async-completion.md

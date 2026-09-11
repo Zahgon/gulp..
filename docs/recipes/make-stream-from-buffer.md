@@ -1,138 +1,131 @@
-# Make stream from buffer (memory contents)
+<!-- front-matter
+id: make-stream-from-buffer
+title: Make a vinyl file from memory
+hide_title: true
+sidebar_label: Make a file from memory
+-->
 
-Sometimes you may need to start a stream with files that their contents are in a variable and not in a physical file. In other words, how to start a 'gulp' stream without using `gulp.src()`.
+# Make a vinyl file from memory
 
-Let's say for example that we have a directory with js lib files and another directory with versions of some module. The target of the build would be to create one js file for each version, containing all the libs and the version of the module concatenated.
+Not every file in a pipeline comes from disk. A version stamp, a generated manifest, a rendered index page — these exist only in memory, and `gulp.Src` cannot read them.
 
-Logically we would break it down like this:
+Build the vinyl file yourself and start the pipeline with `pipeline.From`.
 
-* load the lib files
-* concatenate the lib file contents
-* load the versions files
-* for each version file, concatenate the libs' contents and the version file contents
-* for each version file, output the result in a file
+## A single generated file
 
-Imagine this file structure:
+```go
+package main
 
-```sh
-├── libs
-│   ├── lib1.js
-│   └── lib2.js
-└── versions
-    ├── version.1.js
-    └── version.2.js
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+
+	gulp "github.com/gulpjs/gulp-go"
+	"github.com/gulpjs/gulp-go/pipeline"
+	"github.com/gulpjs/gulp-go/vinyl"
+)
+
+func manifest(ctx context.Context) error {
+	body, err := json.MarshalIndent(map[string]string{
+		"version": version,
+		"commit":  commit,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	cwd, err := filepath.Abs(".")
+	if err != nil {
+		return err
+	}
+
+	file, err := vinyl.New(vinyl.Options{
+		Cwd:      cwd,
+		Base:     cwd,
+		Path:     filepath.Join(cwd, "manifest.json"),
+		Contents: vinyl.Buffer(body),
+	})
+	if err != nil {
+		return err
+	}
+
+	return pipeline.New(pipeline.From(file)).
+		Pipe(gulp.Dest("dist")).
+		Run(ctx)
+}
 ```
 
-You should get:
+`Base` matters as much as `Path`. `Dest()` writes to the destination joined with `Relative()`, which is `Path` measured from `Base`. Here they differ by one segment, so the file lands at `dist/manifest.json`. Set `Base` to the parent of a nested path and the directories are created for you:
 
-```sh
-└── output
-    ├── version.1.complete.js # lib1.js + lib2.js + version.1.js
-    └── version.2.complete.js # lib1.js + lib2.js + version.2.js
+```go
+Base: cwd,
+Path: filepath.Join(cwd, "meta", "manifest.json"),   // -> dist/meta/manifest.json
 ```
 
-A simple and modular way to do this would be the following:
+> Forgetting `Base` is the usual mistake. `Base()` falls back to `Cwd()`, which is often right, but if `Path` is not below the cwd then `Relative()` returns a `../..` path and `Dest()` writes outside the destination.
 
-```js
-var gulp = require('gulp');
-var source = require('vinyl-source-stream');
-var vinylBuffer = require('vinyl-buffer');
-var tap = require('gulp-tap');
-var concat = require('gulp-concat');
-var size = require('gulp-size');
-var path = require('path');
-var es = require('event-stream');
+## Injecting a file into an existing pipeline
 
-var memory = {}; // we'll keep our assets in memory
+To add a generated file to files read from disk, collect the disk files and prepend:
 
-// task of loading the files' contents in memory
-gulp.task('load-lib-files', function() {
-  // read the lib files from the disk
-  return gulp.src('src/libs/*.js')
-    // concatenate all lib files into one
-    .pipe(concat('libs.concat.js'))
-    // tap into the stream to get each file's data
-    .pipe(tap(function(file) {
-      // save the file contents in memory
-      memory[path.basename(file.path)] = file.contents.toString();
-    }));
-});
+```go
+func build(ctx context.Context) error {
+	files, err := gulp.Src([]string{"src/**/*.js"}).Collect(ctx)
+	if err != nil {
+		return err
+	}
 
-gulp.task('load-versions', function() {
-  memory.versions = {};
-  // read the version files from the disk
-  return gulp.src('src/versions/version.*.js')
-  // tap into the stream to get each file's data
-  .pipe( tap(function(file) {
-    // save the file contents in the assets
-    memory.versions[path.basename(file.path)] = file.contents.toString();
-  }));
-});
+	banner, err := bannerFile(files)
+	if err != nil {
+		return err
+	}
 
-gulp.task('write-versions', function() {
-  // we store all the different version file names in an array
-  var availableVersions = Object.keys(memory.versions);
-  // we make an array to store all the stream promises
-  var streams = [];
-
-  availableVersions.forEach(function(v) {
-    // make a new stream with fake file name
-    var stream = source('final.' + v);
-
-    var streamEnd = stream;
-
-    // we load the data from the concatenated libs
-    var fileContents = memory['libs.concat.js'] +
-      // we add the version's data
-      '\n' + memory.versions[v];
-
-    // write the file contents to the stream
-    stream.write(fileContents);
-
-    process.nextTick(function() {
-      // in the next process cycle, end the stream
-      stream.end();
-    });
-
-    streamEnd = streamEnd
-    // transform the raw data into the stream, into a vinyl object/file
-    .pipe(vinylBuffer())
-    //.pipe(tap(function(file) { /* do something with the file contents here */ }))
-    .pipe(gulp.dest('output'));
-
-    // add the end of the stream, otherwise the task would finish before all the processing
-    // is done
-    streams.push(streamEnd);
-
-  });
-
-  return es.merge.apply(this, streams);
-});
-
-//============================================ our main task
-gulp.task('default', gulp.series(
-    // load the files in parallel
-    gulp.parallel('load-lib-files', 'load-versions'),
-    // ready to write once all resources are in memory
-    'write-versions'
-  )
-);
-
-//============================================ our watcher task
-// only watch after having run 'default' once so that all resources
-// are already in memory
-gulp.task('watch', gulp.series(
-  'default',
-  function() {
-    gulp.watch('./src/libs/*.js', gulp.series(
-      'load-lib-files',
-      'write-versions'
-    ));
-
-    gulp.watch('./src/versions/*.js', gulp.series(
-      'load-lib-files',
-      'write-versions'
-    ));
-  }
-));
+	return pipeline.New(pipeline.From(append([]*gulp.File{banner}, files...)...)).
+		Pipe(gulp.Dest("dist")).
+		Run(ctx)
+}
 ```
+
+`Collect` buffers, so use this when the generated file genuinely depends on the others — a manifest listing every bundle, for instance. If it does not, register a second task and let `gulp.Parallel` run both.
+
+## Streaming contents
+
+A file assembled from memory is normally a buffer. If the content is large or produced incrementally, hand `vinyl.NewStream` an opener instead:
+
+```go
+file.Contents = vinyl.NewStream(func() (io.ReadCloser, error) {
+	pr, pw := io.Pipe()
+	go func() {
+		pw.CloseWithError(render(pw))
+	}()
+	return pr, nil
+})
+```
+
+The opener is not called until a later stage reads, so nothing is generated for a pipeline that is built and never run. `vinyl.NewStreamFromBytes(b)` is the shorthand for the common case of wrapping bytes you already have, and unlike a plain `bytes.Reader` it can be re-read after `Reset()`.
+
+## Directories and empty files
+
+A vinyl file with `nil` contents is a *null* file: it is re-emitted by every stage but never written to disk. A file whose `Stat.Dir` is true is a directory, and `Dest()` creates it:
+
+```go
+dir, err := vinyl.New(vinyl.Options{
+	Cwd:  cwd,
+	Base: cwd,
+	Path: filepath.Join(cwd, "empty-dir"),
+	Stat: &vinyl.Stat{Dir: true},
+})
+```
+
+To write a genuinely empty file, give it an empty buffer — `vinyl.Buffer(nil)` is null, `vinyl.Buffer([]byte{})` is empty.
+
+## Related
+
+- [Working with files][files] — the vinyl accessors in full.
+- [Using multiple sources in one task][multiple] — merging pipelines.
+- [Writing a plugin][plugin] — generating files from inside a transform.
+
+[files]: ../getting-started/5-working-with-files.md
+[multiple]: using-multiple-sources-in-one-task.md
+[plugin]: ../writing-a-plugin/README.md

@@ -1,100 +1,195 @@
-<!-- front-matter
-id: automate-releases
-title: Automate Releases
-hide_title: true
-sidebar_label: Automate Releases 
+<!--
+name: automate-releases
+title: Automate releases
 -->
 
-# Automate Releases
+# Automate releases
 
-If your project follows a semantic versioning, it may be a good idea to automatize the steps needed to do a release.
-The recipe below bumps the project version, commits the changes to git and creates a new GitHub release.
+Upstream's recipe reaches for `gulp-conventional-changelog`, `gulp-bump` and
+`gulp-git` to rewrite `package.json`, regenerate `CHANGELOG.md` and tag the
+result. A Go module has no version field to bump — the version *is* the git
+tag — so the recipe shrinks to generating a changelog, tagging, and pushing.
 
-For publishing a GitHub release you'll need to [create a personal access token](https://docs.github.com/en/free-pro-team@latest/github/authenticating-to-github/creating-a-personal-access-token) and add it to your project. However, we don't want to commit it, so we'll use [`dotenv`](https://www.npmjs.com/package/dotenv) to load it from a git-ignored `.env` file:
+## Reading the current version
 
+`git describe` is the whole lookup. There is no file to parse and therefore no
+file that can disagree with the tag.
+
+```go
+func currentVersion(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", "describe", "--tags", "--abbrev=0").Output()
+	if err != nil {
+		// No tags yet. Everything before the first release is v0.0.0.
+		return "v0.0.0", nil
+	}
+	return strings.TrimSpace(string(out)), nil
+}
 ```
-GH_TOKEN=ff34885...
+
+## Choosing the next version
+
+Take the bump from the command line so the decision stays with the person
+running the release, and let the task compute the number.
+
+```go
+func nextVersion(current, bump string) (string, error) {
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(current, "v%d.%d.%d", &major, &minor, &patch); err != nil {
+		return "", fmt.Errorf("parse %s: %w", current, err)
+	}
+
+	switch bump {
+	case "major":
+		major, minor, patch = major+1, 0, 0
+	case "minor":
+		minor, patch = minor+1, 0
+	case "patch":
+		patch++
+	default:
+		return "", fmt.Errorf("unknown bump %q, want major, minor or patch", bump)
+	}
+
+	return fmt.Sprintf("v%d.%d.%d", major, minor, patch), nil
+}
 ```
 
-Don't forget to add `.env` to your `.gitignore`.
+`gulp release --bump=minor` reaches the task as an unrecognised flag, which the
+CLI leaves alone. See [Pass arguments from the CLI][args] for the lookup helper.
 
-Next, install all the necessary dependencies for this recipe:
+## Generating the changelog
 
-```sh
-npm install --save-dev conventional-recommended-bump conventional-changelog-cli conventional-github-releaser dotenv execa
+`git log` with a format string produces the same list `conventional-changelog`
+builds, without the dependency.
+
+```go
+func changelog(ctx context.Context, from, to string) ([]byte, error) {
+	span := from + "..HEAD"
+	if from == "v0.0.0" {
+		span = "HEAD" // First release: everything.
+	}
+
+	out, err := exec.CommandContext(ctx, "git", "log", span, "--no-merges", "--pretty=format:- %s (%h)").Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log %s: %w", span, err)
+	}
+
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "## %s - %s\n\n", to, time.Now().Format(time.DateOnly))
+	buf.Write(out)
+	buf.WriteString("\n\n")
+	return buf.Bytes(), nil
+}
 ```
 
-Based on your environment, setup and preferences, your release workflow might look something like this:
+Prepending it to the existing file is a read, a concatenation and a write —
+`Src`/`Dest` would only get in the way for a single known path.
 
-``` js
-const gulp = require('gulp');
-const conventionalRecommendedBump = require('conventional-recommended-bump');
-const conventionalGithubReleaser = require('conventional-github-releaser');
-const execa = require('execa');
-const fs = require('fs');
-const { promisify } = require('util');
-const dotenv = require('dotenv');
+```go
+func prependChangelog(entry []byte) error {
+	existing, err := os.ReadFile("CHANGELOG.md")
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 
-// load environment variables
-const result = dotenv.config();
+	header, body, found := bytes.Cut(existing, []byte("\n\n"))
+	if !found {
+		header, body = []byte("# Changelog"), existing
+	}
 
-if (result.error) {
-  throw result.error;
+	var buf bytes.Buffer
+	buf.Write(header)
+	buf.WriteString("\n\n")
+	buf.Write(entry)
+	buf.Write(body)
+
+	return os.WriteFile("CHANGELOG.md", buf.Bytes(), 0o644)
 }
-
-// Conventional Changelog preset
-const preset = 'angular';
-// print output of commands into the terminal
-const stdio = 'inherit';
-
-async function bumpVersion() {
-  // get recommended version bump based on commits
-  const { releaseType } = await promisify(conventionalRecommendedBump)({ preset });
-  // bump version without committing and tagging
-  await execa('npm', ['version', releaseType, '--no-git-tag-version'], {
-    stdio,
-  });
-}
-
-async function changelog() {
-  await execa(
-    'npx',
-    [
-      'conventional-changelog',
-      '--preset',
-      preset,
-      '--infile',
-      'CHANGELOG.md',
-      '--same-file',
-    ],
-    { stdio }
-  );
-}
-
-async function commitTagPush() {
-  // even though we could get away with "require" in this case, we're taking the safe route
-  // because "require" caches the value, so if we happen to use "require" again somewhere else
-  // we wouldn't get the current value, but the value of the last time we called "require"
-  const { version } = JSON.parse(await promisify(fs.readFile)('package.json'));
-  const commitMsg = `chore: release ${version}`;
-  await execa('git', ['add', '.'], { stdio });
-  await execa('git', ['commit', '--message', commitMsg], { stdio });
-  await execa('git', ['tag', `v${version}`], { stdio });
-  await execa('git', ['push', '--follow-tags'], { stdio });
-}
-
-function githubRelease(done) {
-  conventionalGithubReleaser(
-    { type: 'oauth', token: process.env.GH_TOKEN },
-    { preset },
-    done
-  );
-}
-
-exports.release = gulp.series(
-  bumpVersion,
-  changelog,
-  commitTagPush,
-  githubRelease
-);
 ```
+
+## Refusing to release a dirty tree
+
+Check this first. A release built from uncommitted work is a release nobody can
+reproduce.
+
+```go
+func requireCleanTree(ctx context.Context) error {
+	out, err := exec.CommandContext(ctx, "git", "status", "--porcelain").Output()
+	if err != nil {
+		return fmt.Errorf("git status: %w", err)
+	}
+	if len(bytes.TrimSpace(out)) > 0 {
+		return errors.New("working tree has uncommitted changes")
+	}
+	return nil
+}
+```
+
+## The task
+
+```go
+func release(ctx context.Context) error {
+	if err := requireCleanTree(ctx); err != nil {
+		return err
+	}
+
+	current, err := currentVersion(ctx)
+	if err != nil {
+		return err
+	}
+
+	next, err := nextVersion(current, flagValue("bump", "patch"))
+	if err != nil {
+		return err
+	}
+
+	entry, err := changelog(ctx, current, next)
+	if err != nil {
+		return err
+	}
+	if err := prependChangelog(entry); err != nil {
+		return err
+	}
+
+	for _, args := range [][]string{
+		{"add", "CHANGELOG.md"},
+		{"commit", "-m", "release " + next},
+		{"tag", "-a", next, "-m", next},
+	} {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("git %s: %w", args[0], err)
+		}
+	}
+
+	fmt.Println("tagged", next, "- push with: git push --follow-tags")
+	return nil
+}
+
+func main() {
+	t := gulp.Task("release", release)
+	t.Description = "Tag a new release and update the changelog"
+	t.Flags = map[string]string{"--bump": "major, minor or patch (default patch)"}
+
+	gulp.Main()
+}
+```
+
+The push is deliberately left to the operator. Everything before it is local
+and reversible with `git tag -d` and `git reset`; the push is not.
+
+> Run the tests before tagging by registering the release task as a series:
+> `gulp.TaskRef("release", gulp.Series(gulp.Name("check"), gulp.Anonymous(release)))`.
+> A `Series` stops at the first failure, so a failing test never reaches the
+> tagging step.
+
+## Publishing
+
+There is nothing to publish. `go install example.com/tool@v1.2.0` resolves
+straight from the tag once it is pushed, and the module proxy picks it up on
+first request. If the release also ships binaries, add a task that runs
+`goreleaser release --clean` after the tag exists.
+
+[args]: pass-arguments-from-cli.md
+[cli]: ../CLI.md
+[task]: ../api/task.md

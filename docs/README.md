@@ -1,65 +1,97 @@
-# gulp documentation
+<p align="center">
+  <a href="https://gulpjs.com">
+    <img height="257" width="114" src="https://raw.githubusercontent.com/gulpjs/artwork/master/gulp-2x.png">
+  </a>
+</p>
 
-* [Getting Started](getting-started/) - Get started with gulp
-* [API documentation](api/) - The programming interface, defined
-* [CLI documentation](CLI.md) - Learn how to call tasks and use compilers
-* [Writing a Plugin](writing-a-plugin/) - The essentials of writing a gulp plugin
-* [Why Use Pump?](why-use-pump/README.md) - Why to use the `pump` module instead of calling `.pipe` yourself
-* [Simplified Chinese documentation][SimplifiedChineseDocs] - gulp 简体中文文档
-* [Korean documentation][KoreanDocs] - gulp 한국어 참조 문서
-* [Polish documentation](/docs/locale/pl_PL/README.md) - gulp Dokumentacja
+# Documentation
 
+A Go port of gulp, the streaming build system. If you are new here, start with
+[Getting Started][getting-started].
 
-## FAQ
+These pages describe the Go API. Where behaviour differs from the JavaScript
+original, the difference is called out inline and catalogued in
+[MIGRATION.md][migration].
 
-See the [FAQ](FAQ.md) for the answers to commonly asked questions.
+## Getting started
 
+1. [Quick Start][quick-start]
+2. [Go and Gulpfiles][go-and-gulpfiles]
+3. [Creating Tasks][creating-tasks]
+4. [Async Completion][async-completion]
+5. [Working with Files][working-with-files]
+6. [Explaining Globs][explaining-globs]
+7. [Using Plugins][using-plugins]
+8. [Watching Files][watching-files]
 
-## Recipes
+## API
 
-The community has written [recipes](recipes#recipes) for common gulp use-cases.
+* [Concepts][concepts]
+* [`Src()`][src], [`Dest()`][dest], [`Symlink()`][symlink]
+* [`Task()`][task], [`Series()`][series], [`Parallel()`][parallel]
+* [`Watch()`][watch], [`LastRun()`][last-run]
+* [`Registry()`][registry], [`Tree()`][tree]
+* [Vinyl][vinyl], [`vinyl.IsVinyl()`][is-vinyl], [`vinyl.IsCustomProp()`][is-custom-prop]
 
+## Command line
 
-## Still got questions?
+* [CLI reference][cli]
 
-Post on [StackOverflow with a #gulp tag](https://stackoverflow.com/questions/tagged/gulp) or come chat with us in [#gulpjs](https://webchat.freenode.net/?channels=gulpjs) on [Freenode](https://freenode.net/).
+## Advanced
 
-## Videos
-* [Intro to Gulp 4](https://youtu.be/N42LQ2dLoA8) presented by @addyosmani and @gauntface
+* [Creating Custom Registries][custom-registries]
+* [Why Go needs no `pump`][why-use-pump]
 
-## Books
-* [Developing a gulp Edge](http://shop.oreilly.com/product/9781939902146.do)
-* [Getting Started with Gulp – Second Edition](https://www.packtpub.com/application-development/getting-started-gulp-%E2%80%93-second-edition) - Travis Maynard, Packt (April 2017)
+## Writing a plugin
 
+* [Overview][writing-a-plugin]
+* [Using Buffers][using-buffers]
+* [Dealing with Streams][dealing-with-streams]
+* [Testing][testing]
+* [Guidelines][guidelines]
+* [Recommended Packages][recommended-modules]
 
-## Articles
-* [Tagtree intro to gulp video](http://tagtree.io/gulp)
-* [Introduction to node.js streams](https://github.com/substack/stream-handbook)
-* [Video introduction to node.js streams](https://www.youtube.com/watch?v=QgEuZ52OZtU)
-* [Getting started with gulp (by @markgdyr)](https://markgoodyear.com/2014/01/getting-started-with-gulp/)
-* [A cheatsheet for gulp](https://github.com/osscafe/gulp-cheatsheet)
-* [Why you shouldn’t create a gulp plugin (or, how to stop worrying and learn to love existing node packages)](http://blog.overzealous.com/post/74121048393/why-you-shouldnt-create-a-gulp-plugin-or-how-to-stop)
-* [Inspiration (slides) about why gulp was made](http://slid.es/contra/gulp)
-* [Building With Gulp](http://www.smashingmagazine.com/2014/06/11/building-with-gulp/)
-* [Gulp - The Basics (screencast)](https://www.youtube.com/watch?v=dwSLFai8ovQ)
-* [Get started with gulp (video series)](https://www.youtube.com/playlist?list=PLRk95HPmOM6PN-G1xyKj9q6ap_dc9Yckm)
-* [Optimize your web code with gulp](http://www.linuxuser.co.uk/tutorials/optimise-your-web-code-with-gulp-js)
-* [Automate Your Tasks Easily with Gulp.js ](https://scotch.io/tutorials/automate-your-tasks-easily-with-gulp-js)
-* [How to upgrade to Gulp v4](https://www.liquidlight.co.uk/blog/article/how-do-i-update-to-gulp-4/)
+## Other
 
-## Examples
+* [Recipes][recipes]
+* [FAQ][faq]
+* [Documentation Missing][documentation-missing]
+* [For Enterprise][for-enterprise]
 
-- [Web Starter Kit gulpfile](https://github.com/google/web-starter-kit/blob/master/gulpfile.babel.js)
-
-
-## License
-
-All the documentation is covered by the CC0 license *(do whatever you want with it - public domain)*.
-
-[![CC0](https://i.creativecommons.org/p/zero/1.0/88x31.png)](https://creativecommons.org/publicdomain/zero/1.0/)
-
-To the extent possible under law, [Fractal](http://wearefractal.com) has waived all copyright and related or neighboring rights to this work.
-
-[SpanishDocs]: https://github.com/bucaran/gulp-docs-es
-[SimplifiedChineseDocs]: https://github.com/lisposter/gulp-docs-zh-cn
-[KoreanDocs]: https://github.com/preco21/gulp-docs-ko
+[getting-started]: getting-started/README.md
+[quick-start]: getting-started/1-quick-start.md
+[go-and-gulpfiles]: getting-started/2-go-and-gulpfiles.md
+[creating-tasks]: getting-started/3-creating-tasks.md
+[async-completion]: getting-started/4-async-completion.md
+[working-with-files]: getting-started/5-working-with-files.md
+[explaining-globs]: getting-started/6-explaining-globs.md
+[using-plugins]: getting-started/7-using-plugins.md
+[watching-files]: getting-started/8-watching-files.md
+[concepts]: api/concepts.md
+[src]: api/src.md
+[dest]: api/dest.md
+[symlink]: api/symlink.md
+[task]: api/task.md
+[series]: api/series.md
+[parallel]: api/parallel.md
+[watch]: api/watch.md
+[last-run]: api/last-run.md
+[registry]: api/registry.md
+[tree]: api/tree.md
+[vinyl]: api/vinyl.md
+[is-vinyl]: api/vinyl-isvinyl.md
+[is-custom-prop]: api/vinyl-iscustomprop.md
+[cli]: CLI.md
+[custom-registries]: advanced/creating-custom-registries.md
+[why-use-pump]: why-use-pump/README.md
+[writing-a-plugin]: writing-a-plugin/README.md
+[using-buffers]: writing-a-plugin/using-buffers.md
+[dealing-with-streams]: writing-a-plugin/dealing-with-streams.md
+[testing]: writing-a-plugin/testing.md
+[guidelines]: writing-a-plugin/guidelines.md
+[recommended-modules]: writing-a-plugin/recommended-modules.md
+[recipes]: recipes/README.md
+[faq]: FAQ.md
+[documentation-missing]: documentation-missing.md
+[for-enterprise]: support/for-enterprise.md
+[migration]: ../MIGRATION.md

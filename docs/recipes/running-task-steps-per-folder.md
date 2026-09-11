@@ -1,71 +1,144 @@
-# Generating a file per folder
+<!--
+name: running-task-steps-per-folder
+-->
 
-If you have a set of folders, and wish to perform a set of tasks on each, for instance...
+# Running task steps per folder
 
-```
-/scripts
-/scripts/jquery/*.js
-/scripts/angularjs/*.js
-```
-
-...and want to end up with...
+Given a source tree with one directory per component:
 
 ```
-/scripts
-/scripts/jquery.min.js
-/scripts/angularjs.min.js
+src/
+├── admin/
+│   ├── index.css
+│   └── table.css
+├── public/
+│   ├── index.css
+│   └── hero.css
 ```
 
-...you'll need to do something like the following...
+produce `dist/admin.css` and `dist/public.css` — one bundle per folder.
 
-``` javascript
-var fs = require('fs');
-var path = require('path');
-var merge = require('merge-stream');
-var gulp = require('gulp');
-var concat = require('gulp-concat');
-var rename = require('gulp-rename');
-var uglify = require('gulp-uglify');
+## Discover the folders
 
-var scriptsPath = 'src/scripts';
+```go
+func folders(root string) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
 
-function getFolders(dir) {
-    return fs.readdirSync(dir)
-      .filter(function(file) {
-        return fs.statSync(path.join(dir, file)).isDirectory();
-      });
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
+}
+```
+
+`os.ReadDir` returns entries sorted by filename, so the task list is stable
+between runs.
+
+## One pipeline per folder
+
+```go
+func styles(ctx context.Context) error {
+	names, err := folders("src")
+	if err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		err := gulp.Src([]string{filepath.Join("src", name, "*.css")}).
+			Pipe(plugins.Concat(name + ".css")).
+			Pipe(gulp.Dest("dist")).
+			Run(ctx)
+		if err != nil {
+			return fmt.Errorf("styles %s: %w", name, err)
+		}
+	}
+	return nil
+}
+```
+
+Wrapping the error with the folder name matters: without it, a failure reports
+only `pipeline stage 2: ...` and you have to guess which component broke.
+
+## Concurrently
+
+Each folder is independent, so they can run at once. Use
+`golang.org/x/sync/errgroup` so the first failure cancels the rest, which is the
+same behaviour `gulp.Parallel` has:
+
+```go
+func styles(ctx context.Context) error {
+	names, err := folders("src")
+	if err != nil {
+		return err
+	}
+
+	group, ctx := errgroup.WithContext(ctx)
+	for _, name := range names {
+		group.Go(func() error {
+			err := gulp.Src([]string{filepath.Join("src", name, "*.css")}).
+				Pipe(plugins.Concat(name + ".css")).
+				Pipe(gulp.Dest("dist")).
+				Run(ctx)
+			if err != nil {
+				return fmt.Errorf("styles %s: %w", name, err)
+			}
+			return nil
+		})
+	}
+	return group.Wait()
+}
+```
+
+> `group.Go` captures `name` correctly because Go 1.22 gives each loop iteration
+> its own variable. On older versions this silently built every bundle from the
+> last folder.
+
+## As separate registered tasks
+
+If each folder should appear in `gulp --tasks` and be runnable on its own,
+register them and compose:
+
+```go
+func registerStyles() error {
+	names, err := folders("src")
+	if err != nil {
+		return err
+	}
+
+	refs := make([]gulp.Ref, 0, len(names))
+	for _, name := range names {
+		task := gulp.Task("styles:"+name, buildFolder(name))
+		task.Description = "Bundle src/" + name
+		refs = append(refs, task)
+	}
+
+	_, err = gulp.TaskRef("styles", gulp.Parallel(refs...))
+	return err
 }
 
-gulp.task('scripts', function(done) {
-   var folders = getFolders(scriptsPath);
-   if (folders.length === 0) return done(); // nothing to do!
-   var tasks = folders.map(function(folder) {
-      return gulp.src(path.join(scriptsPath, folder, '/**/*.js'))
-        // concat into foldername.js
-        .pipe(concat(folder + '.js'))
-        // write to output
-        .pipe(gulp.dest(scriptsPath))
-        // minify
-        .pipe(uglify())
-        // rename to folder.min.js
-        .pipe(rename(folder + '.min.js'))
-        // write to output again
-        .pipe(gulp.dest(scriptsPath));
-   });
-
-   // process all remaining files in scriptsPath root into main.js and main.min.js files
-   var root = gulp.src(path.join(scriptsPath, '/*.js'))
-        .pipe(concat('main.js'))
-        .pipe(gulp.dest(scriptsPath))
-        .pipe(uglify())
-        .pipe(rename('main.min.js'))
-        .pipe(gulp.dest(scriptsPath));
-
-   return merge(tasks, root);
-});
+func buildFolder(name string) gulp.TaskFunc {
+	return func(ctx context.Context) error {
+		return gulp.Src([]string{filepath.Join("src", name, "*.css")}).
+			Pipe(plugins.Concat(name + ".css")).
+			Pipe(gulp.Dest("dist")).
+			Run(ctx)
+	}
+}
 ```
 
-A few notes:
+Note that registration reads the directory at startup, so a folder added later
+needs a restart. That is the trade for having the tasks listed.
 
-- `folders.map` - executes the function once per folder, and returns the async stream
-- `merge` - combines the streams and ends only when all streams emitted end
+## Related
+
+- [Creating tasks][tasks] — registering tasks from a loop
+- [Using multiple sources in one task][multiple] — the opposite problem
+
+[tasks]: ../getting-started/3-creating-tasks.md
+[multiple]: using-multiple-sources-in-one-task.md

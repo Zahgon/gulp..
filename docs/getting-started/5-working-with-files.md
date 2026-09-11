@@ -7,92 +7,171 @@ sidebar_label: Working with Files
 
 # Working with Files
 
-The `src()` and `dest()` methods are exposed by gulp to interact with files on your computer.
+`Src()` and `Dest()` are the two ends of every file pipeline. `Src()` reads
+files off disk and emits them; `Dest()` writes them back out. Everything in
+between is a transform.
 
-`src()` is given a [glob][explaining-globs-docs] to read from the file system and produces a [Node stream][node-streams-docs]. It locates all matching files and reads them into memory to pass through the stream.
-
-The stream produced by `src()` should be returned from a task to signal async completion, as mentioned in [Creating Tasks][creating-tasks-docs].
-
-```js
-const { src, dest } = require('gulp');
-
-exports.default = function() {
-  return src('src/*.js')
-    .pipe(dest('output/'));
+```go
+func copyStyles(ctx context.Context) error {
+	return gulp.Src([]string{"src/**/*.css"}).
+		Pipe(gulp.Dest("dist")).
+		Run(ctx)
 }
 ```
 
-The main API of a stream is the `.pipe()` method for chaining Transform or Writable streams.
+## Vinyl files
 
-```js
-const { src, dest } = require('gulp');
-const babel = require('gulp-babel');
+A file travelling through a pipeline is a `*gulp.File` — a vinyl file. It is a
+metadata object with contents attached, not a path and not an `os.File`:
 
-exports.default = function() {
-  return src('src/*.js')
-    .pipe(babel())
-    .pipe(dest('output/'));
-}
+```go
+f.Path()      // /home/me/project/src/css/site.css
+f.Base()      // /home/me/project/src
+f.Relative()  // css/site.css
+f.Cwd()       // /home/me/project
+f.Stat        // *vinyl.Stat, an fs.FileInfo
+f.Contents    // vinyl.Buffer, *vinyl.Stream, or nil
 ```
 
-`dest()` is given an output directory string and also produces a [Node stream][node-streams-docs] which is generally used as a terminator stream. When it receives a file passed through the pipeline, it writes the contents and other details out to the filesystem at a given directory.  The `symlink()` method is also available and operates like `dest()`, but creates links instead of files (see [`symlink()`][symlink-api-docs] for details).
+`Relative()` is the important one. It is `Path()` minus `Base()`, and it is
+what `Dest()` joins onto the output directory. Preserving it is what keeps your
+directory structure intact.
 
-Most often plugins will be placed between `src()` and `dest()` using the `.pipe()` method and will transform the files within the stream.
+## Base, and why globs set it
 
-## Adding files to the stream
+The **base** is the part of the glob before the first magic character:
 
-`src()` can also be placed in the middle of a pipeline to add files to the stream based on the given globs. The additional files will only be available to transformations later in the stream.  If [globs overlap][overlapping-globs-docs], the files will be added again.
+| Glob                  | Base       |
+| --------------------- | ---------- |
+| `src/css/**/*.css`    | `src/css/` |
+| `src/**/*.css`        | `src/`     |
+| `src/css/site.css`    | `src/css/` |
 
-This can be useful for transpiling some files before adding plain JavaScript files to the pipeline and uglifying everything.
+So `gulp.Src([]string{"src/**/*.css"}).Pipe(gulp.Dest("dist"))` turns
+`src/css/site.css` into `dist/css/site.css`, while
+`gulp.Src([]string{"src/css/**/*.css"})` turns the same input into
+`dist/site.css`. If you want a different answer, set the base yourself:
 
-```js
-const { src, dest } = require('gulp');
-const babel = require('gulp-babel');
-const uglify = require('gulp-uglify');
-
-exports.default = function() {
-  return src('src/*.js')
-    .pipe(babel())
-    .pipe(src('vendor/*.js'))
-    .pipe(uglify())
-    .pipe(dest('output/'));
-}
+```go
+gulp.Src([]string{"src/css/**/*.css"}, gulp.SrcOptions{Base: "src"})
 ```
 
-## Output in phases
+## Contents
 
-`dest()` can be used in the middle of a pipeline to write intermediate states to the filesystem. When a file is received, the current state is written out to the filesystem, the path is updated to represent the new location of the output file, then that file continues down the pipeline.
+A file's contents come in three shapes, and the predicates tell them apart:
 
-This feature can be useful to create unminified and minified files with the same pipeline.
+- `f.IsBuffer()` — the whole file is in memory as a `vinyl.Buffer`.
+- `f.IsStream()` — a `*vinyl.Stream`, read on demand.
+- `f.IsNull()` — no contents at all, which is also how directories travel.
 
-```js
-const { src, dest } = require('gulp');
-const babel = require('gulp-babel');
-const uglify = require('gulp-uglify');
-const rename = require('gulp-rename');
+Buffers are the default because almost every transform needs the whole file.
+Switch to streams for files too large to hold in memory:
 
-exports.default = function() {
-  return src('src/*.js')
-    .pipe(babel())
-    .pipe(src('vendor/*.js'))
-    .pipe(dest('output/'))
-    .pipe(uglify())
-    .pipe(rename({ extname: '.min.js' }))
-    .pipe(dest('output/'));
-}
+```go
+gulp.Src([]string{"assets/**/*.mp4"}, gulp.SrcOptions{
+	Buffer: gulp.Value(false),
+})
 ```
 
-## Modes: streaming, buffered, and empty
+Or skip reading entirely when you only care about paths — moving, deleting or
+symlinking:
 
-`src()` can operate in three modes: buffering, streaming, and empty. These are configured with the `buffer` and `read` [options][src-options-api-docs] on `src()`.
+```go
+gulp.Src([]string{"dist/**/*"}, gulp.SrcOptions{
+	Read: gulp.Value(false),
+})
+```
 
-* Buffering mode is the default and loads the file contents into memory. Plugins usually operate in buffering mode and many don't support streaming mode.
-* Streaming mode exists mainly to operate on large files that can't fit in memory, like giant images or movies. The contents are streamed from the filesystem in small chunks instead of loaded all at once. If you need to use streaming mode, look for a plugin that supports it or write your own.
-* Empty mode contains no contents and is useful when only working with file metadata.
+A file with null contents is **not written to disk** by `Dest()`, though it is
+still re-emitted so later stages can see it. Directories are created.
 
-[explaining-globs-docs]: ../getting-started/6-explaining-globs.md
-[creating-tasks-docs]: ../getting-started/3-creating-tasks.md
-[overlapping-globs-docs]: ../getting-started/6-explaining-globs.md#overlapping-globs
-[node-streams-docs]: https://nodejs.org/api/stream.html
-[symlink-api-docs]: ../api/symlink.md
-[src-options-api-docs]: ../api/src.md#options
+> `gulp.Value(x)` pins an option to a constant. `gulp.Func(fn)` computes it per
+> file, which is the equivalent of passing a function where the JavaScript API
+> accepts a value.
+
+## Reading
+
+```go
+gulp.Src([]string{"src/**/*.js", "!src/vendor/**"}, gulp.SrcOptions{
+	Cwd:       "/path/to/project",
+	AllowEmpty: true,
+	Since:     gulp.Value(lastBuild),
+})
+```
+
+Globs are matched in the order you give them, and a leading `!` negates. Some
+options worth knowing:
+
+- `AllowEmpty` — by default a glob with no magic characters that matches
+  nothing is an error (`File not found with singular glob`), which catches
+  typos. Set this to accept it.
+- `Since` — skip files not modified since a timestamp. Pair it with
+  `LastRun()` for incremental builds.
+- `Encoding` — decode with something other than UTF-8, or set it to `""` to
+  disable decoding entirely.
+- `RemoveBOM` — strips a UTF-8 byte order mark by default.
+- `ResolveSymlinks` — follow symlinks by default; dangling links are tolerated.
+
+## Writing
+
+```go
+gulp.Dest("dist", gulp.DestOptions{
+	Mode:      gulp.Value(os.FileMode(0o644)),
+	Overwrite: gulp.Value(true),
+})
+```
+
+`Dest()` re-emits every file after writing it, so you can write to more than
+one place:
+
+```go
+return gulp.Src([]string{"src/**/*.css"}).
+	Pipe(gulp.Dest("dist")).
+	Pipe(plugins.Exec(minifyCSS)).
+	Pipe(gulp.Dest("dist/min")).
+	Run(ctx)
+```
+
+Writing updates the file's `Cwd`, `Base`, `Path` and `Stat` to describe the
+copy that now exists, and re-arms a streaming `Contents` so the next stage can
+read it again.
+
+Permissions and timestamps are copied from the vinyl's `Stat` when they differ
+from what landed on disk, using the open file descriptor. Ownership is copied
+too, but only when the process actually owns the file or is running as root —
+the same guard vinyl-fs applies. On platforms without Unix ids the whole step
+is skipped.
+
+The destination may also be computed per file:
+
+```go
+gulp.DestWith(func(f *gulp.File) string {
+	if strings.HasSuffix(f.Path(), ".css") {
+		return "dist/css"
+	}
+	return "dist"
+})
+```
+
+## Symlinks
+
+`Symlink()` takes the same arguments as `Dest()` but links instead of copying:
+
+```go
+return gulp.Src([]string{"src/**/*"}, gulp.SrcOptions{Read: gulp.Value(false)}).
+	Pipe(gulp.Symlink("dist")).
+	Run(ctx)
+```
+
+`Read: false` is the usual companion — there is no reason to read contents you
+are not going to write. Set `RelativeSymlinks` to store a relative target
+rather than an absolute one.
+
+> `UseJunctions` is accepted for API compatibility but has no effect: Go's
+> `os.Symlink` does not let a caller choose the Windows link type.
+
+## Next
+
+[Explaining Globs][globs]
+
+[globs]: 6-explaining-globs.md

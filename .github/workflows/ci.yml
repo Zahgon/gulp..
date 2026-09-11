@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # The first entry is the floor declared in go.mod. It has to be built
+        # here, or the declared minimum is only an assertion.
+        go: ["1.23", "1.24", "1.25"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # The watch suites drive real filesystem events, so they are slower and
+      # more timing-sensitive than the rest; -race makes that worse.
+      - name: Test
+        run: go test -race -covermode=atomic -coverprofile=coverage.out -timeout 15m ./...
+
+      - name: Coverage summary
+        if: runner.os != 'Windows'
+        run: go tool cover -func=coverage.out | tail -n 1
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          files="$(gofmt -l .)"
+          if [ -n "$files" ]; then
+            echo "gofmt needed:"; echo "$files"; exit 1
+          fi
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  differential:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          check-latest: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Installs the JavaScript gulp this port targets, so the differential
+      # test can compare the two CLIs side by side instead of only checking
+      # its golden vectors.
+      - name: Install gulp 5.0.1
+        run: |
+          mkdir -p /tmp/gulp-js
+          cd /tmp/gulp-js
+          npm init -y >/dev/null
+          npm install gulp@5.0.1 --no-audit --no-fund
+
+      - name: Differential test
+        env:
+          GULP_JS_REPO: /tmp/gulp-js/node_modules/gulp
+        run: go test -run Differential -v .

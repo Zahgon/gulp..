@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# Executable launcher, the counterpart of gulp's bin/gulp.js.
+#
+# The JavaScript repository ships an executable at this path so that gulp can be
+# run straight from a checkout. A Go module has no equivalent: cmd/gulp is a
+# package, not a runnable file, so a checkout offers nothing to exec until
+# someone builds it. This script closes that gap.
+#
+# The build runs in a subshell so that the compiled binary is exec'd from the
+# caller's directory. That matters: gulp searches upwards from the working
+# directory for a gulpfile, so building with `cd` in this shell would make every
+# invocation resolve against the module root instead of the user's project.
+
+set -e
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+if [ -x "$root/gulp" ]; then
+	exec "$root/gulp" "$@"
+fi
+
+binary="${TMPDIR:-/tmp}/gulp-go-launcher-$(id -u)"
+(cd "$root" && go build -o "$binary" ./cmd/gulp)
+exec "$binary" "$@"
