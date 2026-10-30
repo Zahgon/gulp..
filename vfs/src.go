@@ -220,7 +220,9 @@ func (r *contentsReader) read(f *vinyl.File) error {
 		if err != nil {
 			return fmt.Errorf("reading symlink %s: %w", f.Path(), err)
 		}
-		f.SetSymlink(target)
+		if err := f.SetSymlink(target); err != nil {
+			return fmt.Errorf("reading symlink %s: %w", f.Path(), err)
+		}
 		return nil
 	}
 	if r.opts.Buffer.Resolve(f, true) {

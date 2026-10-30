@@ -22,8 +22,10 @@ package fswatch
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -120,6 +122,45 @@ type Watcher interface {
 
 // ErrClosed is returned by Add and Remove after Close.
 var ErrClosed = errors.New("fswatch: watcher is closed")
+
+// ErrErrorsDropped marks an error delivered after earlier ones had to be
+// dropped because the consumer was not draining Errors.
+var ErrErrorsDropped = errors.New("fswatch: errors were dropped")
+
+// errorSink delivers a backend's errors without ever blocking the goroutine
+// that found them, which would stall the event loop and lose notifications.
+// When the buffer is full the error is counted instead, and the next error that
+// can be delivered carries the count, so a slow consumer learns that errors
+// were lost rather than losing them silently.
+type errorSink struct {
+	ch   chan error
+	done <-chan struct{}
+
+	mu      sync.Mutex
+	dropped int
+}
+
+func newErrorSink(done <-chan struct{}) *errorSink {
+	return &errorSink{ch: make(chan error, eventBuffer), done: done}
+}
+
+func (s *errorSink) emit(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dropped > 0 {
+		err = fmt.Errorf("%w (%d before this one): %w", ErrErrorsDropped, s.dropped, err)
+	}
+	select {
+	case s.ch <- err:
+		s.dropped = 0
+	case <-s.done:
+	default:
+		s.dropped++
+	}
+}
 
 const (
 	// defaultInterval matches chokidar's `interval` default.

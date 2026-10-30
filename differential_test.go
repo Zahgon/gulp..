@@ -349,10 +349,10 @@ func TestDifferentialSrcMatchesGulp(t *testing.T) {
 	cwd := testCwd(t)
 
 	cases := []struct {
-		name  string
-		globs []string
-		js    map[string]any
-		go_   gulp.SrcOptions
+		name   string
+		globs  []string
+		js     map[string]any
+		goOpts gulp.SrcOptions
 	}{
 		{name: "flat glob", globs: []string{"./fixtures/*.coffee"}},
 		{name: "deep glob", globs: []string{"./fixtures/**/*.jade"}},
@@ -367,10 +367,10 @@ func TestDifferentialSrcMatchesGulp(t *testing.T) {
 			globs: []string{"./fixtures/stuff/*.dmc", "!fixtures/stuff/test.dmc"},
 		},
 		{
-			name:  "read disabled",
-			globs: []string{"./fixtures/*.coffee"},
-			js:    map[string]any{"read": false},
-			go_:   gulp.SrcOptions{Read: gulp.Value(false)},
+			name:   "read disabled",
+			globs:  []string{"./fixtures/*.coffee"},
+			js:     map[string]any{"read": false},
+			goOpts: gulp.SrcOptions{Read: gulp.Value(false)},
 		},
 		{
 			name:  "directory",
@@ -383,7 +383,7 @@ func TestDifferentialSrcMatchesGulp(t *testing.T) {
 			want := replay(t, oracle, oracle.Src, tc.name, func(repo string) []jsFile {
 				return collectJS(t, repo, tc.globs, tc.js, cwd)
 			})
-			got := collectGo(t, tc.globs, tc.go_, cwd)
+			got := collectGo(t, tc.globs, tc.goOpts, cwd)
 			compareFiles(t, got, want)
 		})
 	}

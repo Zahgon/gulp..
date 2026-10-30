@@ -19,10 +19,6 @@ import (
 	"strings"
 )
 
-// magicChars are the characters that make a path segment a pattern rather than
-// a literal name.
-const magicChars = "*?[]{}()!+@"
-
 // IsGlob reports whether s contains unescaped glob syntax.
 //
 // Port of npm `is-glob` in its default strict mode. gulp uses this in two

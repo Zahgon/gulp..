@@ -45,7 +45,7 @@ type pollWatcher struct {
 	cfg      Config
 	interval time.Duration
 	events   chan Event
-	errs     chan error
+	errs     *errorSink
 
 	done     chan struct{}
 	closeOne sync.Once
@@ -66,12 +66,13 @@ func NewPolling(cfg Config) (Watcher, error) {
 	if interval <= 0 {
 		interval = defaultInterval
 	}
+	done := make(chan struct{})
 	w := &pollWatcher{
 		cfg:      cfg,
 		interval: interval,
 		events:   make(chan Event, eventBuffer),
-		errs:     make(chan error, eventBuffer),
-		done:     make(chan struct{}),
+		errs:     newErrorSink(done),
+		done:     done,
 		roots:    make(map[string]struct{}),
 		state:    make(map[string]snapshot),
 	}
@@ -81,7 +82,7 @@ func NewPolling(cfg Config) (Watcher, error) {
 }
 
 func (w *pollWatcher) Events() <-chan Event { return w.events }
-func (w *pollWatcher) Errors() <-chan error { return w.errs }
+func (w *pollWatcher) Errors() <-chan error { return w.errs.ch }
 
 // Add registers a root and immediately records a baseline for it, so that
 // pre-existing entries are not reported as creations on the first tick.
@@ -273,7 +274,7 @@ func (w *pollWatcher) walk(dir string, depth int, out map[string]snapshot) {
 
 	info, err := os.Lstat(dir)
 	if err != nil {
-		if !os.IsNotExist(err) && !(w.cfg.IgnorePermissionErrors && ignorablePermissionError(err)) {
+		if !os.IsNotExist(err) && !w.ignorable(err) {
 			w.emitError(fmt.Errorf("fswatch: %w", err))
 		}
 		return
@@ -282,7 +283,7 @@ func (w *pollWatcher) walk(dir string, depth int, out map[string]snapshot) {
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if !(w.cfg.IgnorePermissionErrors && ignorablePermissionError(err)) {
+		if !w.ignorable(err) {
 			w.emitError(fmt.Errorf("fswatch: %w", err))
 		}
 		return
@@ -292,6 +293,11 @@ func (w *pollWatcher) walk(dir string, depth int, out map[string]snapshot) {
 		child := filepath.Join(dir, entry.Name())
 		childInfo, err := entry.Info()
 		if err != nil {
+			// An entry removed between ReadDir and Info is not an error: the
+			// next scan reports it as an unlink. Anything else is surfaced.
+			if !os.IsNotExist(err) && !w.ignorable(err) {
+				w.emitError(fmt.Errorf("fswatch: %w", err))
+			}
 			continue
 		}
 
@@ -337,13 +343,11 @@ func (w *pollWatcher) emit(ev Event) {
 	}
 }
 
+// ignorable reports whether IgnorePermissionErrors covers err.
+func (w *pollWatcher) ignorable(err error) bool {
+	return w.cfg.IgnorePermissionErrors && ignorablePermissionError(err)
+}
+
 func (w *pollWatcher) emitError(err error) {
-	if err == nil {
-		return
-	}
-	select {
-	case w.errs <- err:
-	case <-w.done:
-	default:
-	}
+	w.errs.emit(err)
 }

@@ -18,15 +18,15 @@ import (
 // that existing build output and documentation stay accurate.
 var (
 	// ErrInvalidDestFolder is returned when the destination is empty.
-	ErrInvalidDestFolder = errors.New("Invalid dest() folder argument. Please specify a non-empty string or a function.")
+	ErrInvalidDestFolder = errors.New("Invalid dest() folder argument. Please specify a non-empty string or a function.") //nolint:staticcheck // ST1005: vinyl-fs's exact wording
 
 	// ErrInvalidOutputFolder is returned when a destination function yields an
 	// empty path for some file.
-	ErrInvalidOutputFolder = errors.New("Invalid output folder")
+	ErrInvalidOutputFolder = errors.New("Invalid output folder") //nolint:staticcheck // ST1005: vinyl-fs's exact wording
 
 	// ErrMissingSymlink is returned when a file is marked symbolic but carries
 	// no target.
-	ErrMissingSymlink = errors.New("Missing symlink property on symbolic vinyl")
+	ErrMissingSymlink = errors.New("Missing symlink property on symbolic vinyl") //nolint:staticcheck // ST1005: vinyl-fs's exact wording
 )
 
 // defaultFileMode and defaultDirMode mirror Node's defaults for fs.writeFile
@@ -276,8 +276,7 @@ func (w *writer) writeBuffer(f *vinyl.File) error {
 	}
 
 	if _, err := handle.Write(encoded); err != nil {
-		handle.Close()
-		return fmt.Errorf("writing %s: %w", f.Path(), err)
+		return fmt.Errorf("writing %s: %w", f.Path(), errors.Join(err, handle.Close()))
 	}
 	w.updateMetadata(handle, f)
 	if err := handle.Close(); err != nil {
@@ -309,8 +308,8 @@ func (w *writer) writeStream(f *vinyl.File) error {
 	}
 
 	copyErr := func() error {
-		defer stream.Close()
-		if _, err := io.Copy(handle, c.encodeReader(stream)); err != nil {
+		_, err := io.Copy(handle, c.encodeReader(stream))
+		if err = errors.Join(err, stream.Close()); err != nil {
 			return fmt.Errorf("writing %s: %w", f.Path(), err)
 		}
 		return nil
@@ -392,10 +391,10 @@ func (w *writer) open(f *vinyl.File) (*os.File, error) {
 	}
 
 	overwrite := w.opts.Overwrite.Resolve(f, true)
-	append_ := w.opts.Append.Resolve(f, false)
+	appendMode := w.opts.Append.Resolve(f, false)
 
 	flags := os.O_WRONLY | os.O_CREATE
-	if append_ {
+	if appendMode {
 		flags |= os.O_APPEND
 	} else {
 		flags |= os.O_TRUNC

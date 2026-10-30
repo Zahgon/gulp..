@@ -71,14 +71,14 @@ func TestRunRecoversPanics(t *testing.T) {
 }
 
 func TestFromCallback(t *testing.T) {
-	task := FromCallback(func(done func(error)) { done(nil) })
+	task := FromCallback(func(_ context.Context, done func(error)) { done(nil) })
 	if err := task(context.Background()); err != nil {
 		t.Fatalf("task: %v", err)
 	}
 }
 
 func TestFromCallbackPropagatesError(t *testing.T) {
-	task := FromCallback(func(done func(error)) { done(errBoom) })
+	task := FromCallback(func(_ context.Context, done func(error)) { done(errBoom) })
 	if err := task(context.Background()); !errors.Is(err, errBoom) {
 		t.Fatalf("err = %v, want errBoom", err)
 	}
@@ -87,7 +87,7 @@ func TestFromCallbackPropagatesError(t *testing.T) {
 // A JavaScript task that calls done() twice crashes the process. Guarding with
 // sync.Once is what lets the Go port survive the same mistake.
 func TestFromCallbackIgnoresASecondCompletion(t *testing.T) {
-	task := FromCallback(func(done func(error)) {
+	task := FromCallback(func(_ context.Context, done func(error)) {
 		done(nil)
 		done(errBoom)
 	})
@@ -101,9 +101,12 @@ func TestFromCallbackHonoursCancellation(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
-	task := FromCallback(func(done func(error)) {
-		<-release
-		done(nil)
+	task := FromCallback(func(ctx context.Context, done func(error)) {
+		select {
+		case <-release:
+			done(nil)
+		case <-ctx.Done():
+		}
 	})
 
 	go func() {

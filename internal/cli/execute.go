@@ -37,7 +37,7 @@ func Run(rt Runtime, argv []string) int {
 
 	opts, err := Parse(argv)
 	if err != nil {
-		fmt.Fprintln(rt.Stderr, err)
+		reportError(rt.Stderr, err)
 		return ExitError
 	}
 
@@ -51,12 +51,9 @@ func Run(rt Runtime, argv []string) int {
 
 	switch {
 	case opts.Help:
-		fmt.Fprint(rt.Stdout, Help(msg))
-		return ExitOK
+		return exitWrite(fmt.Fprint(rt.Stdout, Help(msg)))
 	case opts.Version:
-		fmt.Fprintf(rt.Stdout, "CLI version: %s\n", rt.Version)
-		fmt.Fprintf(rt.Stdout, "Local version: %s\n", rt.Version)
-		return ExitOK
+		return exitWrite(fmt.Fprintf(rt.Stdout, "CLI version: %s\nLocal version: %s\n", rt.Version, rt.Version))
 	}
 
 	if err := rt.locate(opts, log, msg); err != nil {
@@ -79,7 +76,26 @@ func Run(rt Runtime, argv []string) int {
 		reportFailure(rt, log, msg, err, reported)
 		return ExitError
 	}
+	if log.WriteErr() != nil {
+		return ExitError
+	}
 	return ExitOK
+}
+
+// exitWrite turns the result of writing a command's output into its exit code:
+// output that cannot be written means the command did not do its job.
+func exitWrite(_ int, err error) int {
+	if err != nil {
+		return ExitError
+	}
+	return ExitOK
+}
+
+// reportError prints err on w before the caller exits with ExitError. A write
+// that fails here is not reported: the exit code already carries the failure,
+// and the stream that refused it is the one it would be reported on.
+func reportError(w io.Writer, err error) {
+	_, _ = fmt.Fprintln(w, err)
 }
 
 func (rt Runtime) withDefaults() Runtime {
@@ -180,26 +196,24 @@ func listTasks(rt Runtime, opts *Options, msg Messages) int {
 	u := rt.Undertaker
 	switch {
 	case opts.TasksSimple:
-		fmt.Fprintln(rt.Stdout, SimpleList(u.Tree(false)))
-		return ExitOK
+		return exitWrite(fmt.Fprintln(rt.Stdout, SimpleList(u.Tree(false))))
 
 	case opts.TasksJSON:
 		tree := u.Tree(true)
 		tree.Label = msg.Description(rt.Gulpfile)
 		data, err := TreeJSON(tree, opts.Depth(), opts.CompactTasks)
 		if err != nil {
-			fmt.Fprintln(rt.Stderr, err)
+			reportError(rt.Stderr, err)
 			return ExitError
 		}
 		if opts.TasksJSONPath != "" {
 			if err := os.WriteFile(opts.TasksJSONPath, data, 0o644); err != nil {
-				fmt.Fprintln(rt.Stderr, err)
+				reportError(rt.Stderr, err)
 				return ExitError
 			}
 			return ExitOK
 		}
-		fmt.Fprintln(rt.Stdout, string(data))
-		return ExitOK
+		return exitWrite(fmt.Fprintln(rt.Stdout, string(data)))
 
 	default:
 		tree := u.Tree(true)
@@ -212,7 +226,9 @@ func listTasks(rt Runtime, opts *Options, msg Messages) int {
 			SortTasks:    opts.SortTasks,
 		}
 		for _, line := range renderer.Render(tree) {
-			fmt.Fprintln(rt.Stdout, line)
+			if _, err := fmt.Fprintln(rt.Stdout, line); err != nil {
+				return ExitError
+			}
 		}
 		return ExitOK
 	}

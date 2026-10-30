@@ -13,7 +13,7 @@ import (
 
 // ErrInvalidSymlinkFolder is returned when [Symlink] is given an empty
 // destination, worded exactly as in vinyl-fs.
-var ErrInvalidSymlinkFolder = errors.New("Invalid symlink() folder argument. Please specify a non-empty string or a function.")
+var ErrInvalidSymlinkFolder = errors.New("Invalid symlink() folder argument. Please specify a non-empty string or a function.") //nolint:staticcheck // ST1005: vinyl-fs's exact wording
 
 // SymlinkOptions configures [Symlink]. Every field is optional; the zero value
 // selects the documented vinyl-fs default.

@@ -61,8 +61,10 @@ func Run(ctx context.Context, fn TaskFunc) (err error) {
 //
 // Calling done more than once is ignored, matching async-done's guard against
 // double completion. If done is never called, the task ends when the context
-// does.
-func FromCallback(fn func(done func(error))) TaskFunc {
+// does. fn receives that context so it can stop its work, and the task returns
+// only after fn has returned, so a finished or cancelled task leaves nothing
+// running behind it.
+func FromCallback(fn func(ctx context.Context, done func(error))) TaskFunc {
 	return func(ctx context.Context) error {
 		if fn == nil {
 			return ErrNoTask
@@ -73,20 +75,30 @@ func FromCallback(fn func(done func(error))) TaskFunc {
 			once.Do(func() { ch <- err })
 		}
 
+		returned := make(chan struct{})
 		go func() {
+			defer close(returned)
 			defer func() {
 				if r := recover(); r != nil {
 					done(fmt.Errorf("asyncdone: task panicked: %v", r))
 				}
 			}()
-			fn(done)
+			fn(ctx, done)
 		}()
 
 		select {
 		case err := <-ch:
+			<-returned
 			return err
 		case <-ctx.Done():
-			return fmt.Errorf("%w: %w", ErrIncomplete, ctx.Err())
+			<-returned
+			// A completion reported while fn was stopping still counts.
+			select {
+			case err := <-ch:
+				return err
+			default:
+				return fmt.Errorf("%w: %w", ErrIncomplete, ctx.Err())
+			}
 		}
 	}
 }

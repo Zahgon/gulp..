@@ -37,6 +37,9 @@ type Logger struct {
 	palette Palette
 	level   Level
 	now     func() time.Time
+	// writeErr is the first failed write. Logging never stops a run, but a
+	// run whose log could not be written must not report success.
+	writeErr error
 }
 
 // NewLogger builds a Logger writing to out and errOut.
@@ -81,7 +84,21 @@ func (l *Logger) Debug(format string, args ...any) {
 func (l *Logger) Print(s string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Fprintln(l.out, s)
+	l.record(fmt.Fprintln(l.out, s))
+}
+
+// WriteErr returns the first write that failed, or nil.
+func (l *Logger) WriteErr() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.writeErr
+}
+
+// record keeps the first write error; callers hold l.mu.
+func (l *Logger) record(_ int, err error) {
+	if err != nil && l.writeErr == nil {
+		l.writeErr = err
+	}
 }
 
 func (l *Logger) write(level Level, w io.Writer, format string, args ...any) {
@@ -97,7 +114,7 @@ func (l *Logger) write(level Level, w io.Writer, format string, args ...any) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Fprintln(w, l.timestamp()+" "+msg)
+	l.record(fmt.Fprintln(w, l.timestamp()+" "+msg))
 }
 
 // timestamp renders the bracketed clock gulp prefixes to every log line. The

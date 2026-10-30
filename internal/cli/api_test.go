@@ -1,3 +1,4 @@
+// Tests for the cli package's exported API and terminal detection.
 package cli
 
 import (
@@ -39,7 +40,9 @@ func TestColorSupportedHonoursTheEnvironment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, key := range []string{"FORCE_COLOR", "NO_COLOR", "TERM"} {
 				t.Setenv(key, "")
-				os.Unsetenv(key)
+				if err := os.Unsetenv(key); err != nil {
+					t.Fatalf("unset %s: %v", key, err)
+				}
 			}
 			for key, value := range tc.env {
 				t.Setenv(key, value)
@@ -59,7 +62,11 @@ func TestIsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temp file: %v", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("closing temp file: %v", err)
+		}
+	}()
 
 	if isTerminal(file) {
 		t.Error("isTerminal(regular file) = true")
@@ -69,8 +76,16 @@ func TestIsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	defer read.Close()
-	defer write.Close()
+	defer func() {
+		if err := read.Close(); err != nil {
+			t.Errorf("closing pipe reader: %v", err)
+		}
+	}()
+	defer func() {
+		if err := write.Close(); err != nil {
+			t.Errorf("closing pipe writer: %v", err)
+		}
+	}()
 
 	if isTerminal(write) {
 		t.Error("isTerminal(pipe) = true")

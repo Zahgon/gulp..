@@ -189,7 +189,8 @@ func (g *Gulp) Watch(globs []string, opts WatchOptions, task TaskFunc) (*Watcher
 // Task registers fn under name and returns the stored task.
 //
 // Registering the same name twice replaces the earlier task, matching the
-// JavaScript behaviour.
+// JavaScript behaviour. An empty name panics, as gulp.task throws; TaskRef
+// returns the error instead.
 func (g *Gulp) Task(name string, fn TaskFunc) *undertaker.Task {
 	return g.Set(name, fn)
 }

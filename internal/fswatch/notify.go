@@ -26,7 +26,7 @@ type notifyWatcher struct {
 	inner  *fsnotify.Watcher
 	cfg    Config
 	events chan Event
-	errs   chan error
+	errs   *errorSink
 
 	done     chan struct{}
 	closeOne sync.Once
@@ -48,12 +48,13 @@ func NewNotify(cfg Config) (Watcher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fswatch: %w", err)
 	}
+	done := make(chan struct{})
 	w := &notifyWatcher{
 		inner:   inner,
 		cfg:     cfg,
 		events:  make(chan Event, eventBuffer),
-		errs:    make(chan error, eventBuffer),
-		done:    make(chan struct{}),
+		errs:    newErrorSink(done),
+		done:    done,
 		roots:   make(map[string]string),
 		watched: make(map[string]int),
 		known:   make(map[string]bool),
@@ -63,7 +64,7 @@ func NewNotify(cfg Config) (Watcher, error) {
 }
 
 func (w *notifyWatcher) Events() <-chan Event { return w.events }
-func (w *notifyWatcher) Errors() <-chan error { return w.errs }
+func (w *notifyWatcher) Errors() <-chan error { return w.errs.ch }
 
 // Add registers a root. A file root is handled by watching its parent
 // directory, because a file that does not exist yet cannot be watched and
@@ -156,7 +157,7 @@ func (w *notifyWatcher) watchTree(dir string, depth int) error {
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if w.cfg.IgnorePermissionErrors && ignorablePermissionError(err) {
+		if w.ignorable(err) {
 			return nil
 		}
 		return fmt.Errorf("fswatch: %w", err)
@@ -212,7 +213,7 @@ func (w *notifyWatcher) register(dir string, depth int) error {
 		w.mu.Lock()
 		delete(w.watched, dir)
 		w.mu.Unlock()
-		if w.cfg.IgnorePermissionErrors && ignorablePermissionError(err) {
+		if w.ignorable(err) {
 			return nil
 		}
 		return fmt.Errorf("fswatch: watch %s: %w", dir, err)
@@ -353,7 +354,7 @@ func (w *notifyWatcher) extend(dir string) {
 func (w *notifyWatcher) replay(dir string, depth int) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if !(w.cfg.IgnorePermissionErrors && ignorablePermissionError(err)) {
+		if !w.ignorable(err) {
 			w.emitError(fmt.Errorf("fswatch: %w", err))
 		}
 		return
@@ -390,17 +391,13 @@ func (w *notifyWatcher) emit(ev Event) {
 	}
 }
 
+// ignorable reports whether IgnorePermissionErrors covers err.
+func (w *notifyWatcher) ignorable(err error) bool {
+	return w.cfg.IgnorePermissionErrors && ignorablePermissionError(err)
+}
+
 func (w *notifyWatcher) emitError(err error) {
-	if err == nil {
-		return
-	}
-	select {
-	case w.errs <- err:
-	case <-w.done:
-	default:
-		// The consumer is not draining errors; dropping is preferable to
-		// stalling the event loop, which would lose change notifications.
-	}
+	w.errs.emit(err)
 }
 
 // existingAncestor walks up from dir until it finds a directory that exists,

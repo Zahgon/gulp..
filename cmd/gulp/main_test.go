@@ -42,8 +42,11 @@ func capture(t *testing.T, fn func() int) (code int, stdout, stderr string) {
 	code = fn()
 
 	os.Stdout, os.Stderr = origOut, origErr
-	outW.Close()
-	errW.Close()
+	for _, pipe := range []*os.File{outW, errW} {
+		if err := pipe.Close(); err != nil {
+			t.Errorf("closing capture pipe: %v", err)
+		}
+	}
 	<-done
 	<-errDone
 

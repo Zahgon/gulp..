@@ -68,10 +68,10 @@ type Options struct {
 var (
 	// ErrInvalidGlob is reported for an empty glob, or a glob list with no
 	// positive patterns.
-	ErrInvalidGlob = errors.New("Invalid glob argument")
+	ErrInvalidGlob = errors.New("Invalid glob argument") //nolint:staticcheck // ST1005: wording fixed by docs/api/src.md
 	// ErrSingularGlobNotFound is reported when a glob containing no magic
 	// characters matches nothing and AllowEmpty is false.
-	ErrSingularGlobNotFound = errors.New("File not found with singular glob")
+	ErrSingularGlobNotFound = errors.New("File not found with singular glob") //nolint:staticcheck // ST1005: wording fixed by docs/api/src.md
 )
 
 // New returns a source stage that walks globs and emits one vinyl file per

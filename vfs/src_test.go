@@ -141,7 +141,11 @@ func TestSrcReturnsAnInputStreamWithContentsAsStreamWhenBufferIsFalse(t *testing
 	if !ok {
 		t.Fatalf("contents type = %T, want *vinyl.Stream", files[0].Contents)
 	}
-	defer stream.Close()
+	defer func() {
+		if err := stream.Close(); err != nil {
+			t.Errorf("closing stream: %v", err)
+		}
+	}()
 
 	got, err := io.ReadAll(stream)
 	if err != nil {

@@ -32,7 +32,11 @@ func TestWatchWorksWithDestructuring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	defer w.Close()
+	defer func() {
+		if err := w.Close(); err != nil {
+			t.Errorf("closing watcher: %v", err)
+		}
+	}()
 
 	sourceFile(t, dir, "a.txt", "two")
 
@@ -64,7 +68,11 @@ func assertWatchTaskIsUndefined(t *testing.T, task *undertaker.Task, want string
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	defer w.Close()
+	defer func() {
+		if err := w.Close(); err != nil {
+			t.Errorf("closing watcher: %v", err)
+		}
+	}()
 
 	err = task.Fn(context.Background())
 	var undefined *undertaker.UndefinedTaskError

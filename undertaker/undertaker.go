@@ -64,10 +64,14 @@ func (u *Undertaker) Get(name string) (*Task, bool) {
 }
 
 // Set registers a plain function under a name and returns the stored Task.
+//
+// It panics when the name is empty, as undertaker's assertion throws: an
+// unnamed task is a mistake in the gulpfile, not a condition to recover from.
+// SetTask reports the same failure as an error.
 func (u *Undertaker) Set(name string, fn TaskFunc) *Task {
 	t, err := u.SetTask(name, Func(name, fn))
 	if err != nil {
-		return nil
+		panic(err)
 	}
 	return t
 }

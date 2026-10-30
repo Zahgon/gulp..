@@ -20,7 +20,11 @@ func TestChmodTargetUsesTheDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer handle.Close()
+	defer func() {
+		if err := handle.Close(); err != nil {
+			t.Errorf("closing file: %v", err)
+		}
+	}()
 
 	if err := chmodTarget(handle, path, 0o640); err != nil {
 		t.Fatalf("chmodTarget: %v", err)
@@ -66,7 +70,11 @@ func TestChownTargetToTheCurrentOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer handle.Close()
+	defer func() {
+		if err := handle.Close(); err != nil {
+			t.Errorf("closing file: %v", err)
+		}
+	}()
 
 	// Chowning a file to the ids it already has is the only change a
 	// non-root test can make and still expect to succeed.

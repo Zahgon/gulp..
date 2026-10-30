@@ -42,7 +42,9 @@ func run(argv []string) int {
 	// gulpfile was resolved, so `gulp --help` works in any directory. Asking
 	// for usage and being told "No gulpfile found" would be a poor trade.
 	if opts.Help {
-		fmt.Fprintln(os.Stdout, cli.Help(msg))
+		if _, err := fmt.Fprintln(os.Stdout, cli.Help(msg)); err != nil {
+			return cli.ExitError
+		}
 		return cli.ExitOK
 	}
 
@@ -87,7 +89,7 @@ func locate(opts *cli.Options) (dir, gulpfile string, err error) {
 		if opts.Cwd == "" {
 			start = filepath.Dir(gulpfile)
 		}
-		return filepath.Dir(gulpfile), gulpfile, nil
+		return start, gulpfile, nil
 	}
 
 	gulpfile, ok := cli.FindGulpfile(start)

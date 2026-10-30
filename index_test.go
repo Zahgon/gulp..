@@ -21,7 +21,7 @@ import (
 // compile time, so the typed binding opening each test is the presence check.
 
 func TestSrc(t *testing.T) {
-	var src func([]string, ...gulp.SrcOptions) *gulp.Pipeline = gulp.Src
+	var src func([]string, ...gulp.SrcOptions) *gulp.Pipeline = gulp.Src //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	dir := t.TempDir()
 	sourceFile(t, dir, "a.txt", "one")
@@ -32,7 +32,7 @@ func TestSrc(t *testing.T) {
 }
 
 func TestDest(t *testing.T) {
-	var dest func(string, ...gulp.DestOptions) gulp.Transform = gulp.Dest
+	var dest func(string, ...gulp.DestOptions) gulp.Transform = gulp.Dest //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	src, out := t.TempDir(), t.TempDir()
 	sourceFile(t, src, "a.txt", "one")
@@ -44,7 +44,7 @@ func TestDest(t *testing.T) {
 }
 
 func TestSymlink(t *testing.T) {
-	var symlink func(string, ...gulp.SymlinkOptions) gulp.Transform = gulp.Symlink
+	var symlink func(string, ...gulp.SymlinkOptions) gulp.Transform = gulp.Symlink //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	src, out := t.TempDir(), t.TempDir()
 	sourceFile(t, src, "a.txt", "one")
@@ -60,7 +60,7 @@ func TestSymlink(t *testing.T) {
 }
 
 func TestWatch(t *testing.T) {
-	var watch func([]string, gulp.WatchOptions, gulp.TaskFunc) (*gulp.Watcher, error) = gulp.Watch
+	var watch func([]string, gulp.WatchOptions, gulp.TaskFunc) (*gulp.Watcher, error) = gulp.Watch //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	w, err := watch([]string{filepath.Join(t.TempDir(), "*.txt")}, gulp.WatchOptions{}, nil)
 	if err != nil {
@@ -72,7 +72,7 @@ func TestWatch(t *testing.T) {
 }
 
 func TestTask(t *testing.T) {
-	var task func(string, gulp.TaskFunc) *undertaker.Task = gulp.Task
+	var task func(string, gulp.TaskFunc) *undertaker.Task = gulp.Task //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	registered := task("pkg-export-task", func(context.Context) error { return nil })
 	if registered == nil {
@@ -84,7 +84,7 @@ func TestTask(t *testing.T) {
 }
 
 func TestSeries(t *testing.T) {
-	var series func(...gulp.Ref) *undertaker.Task = gulp.Series
+	var series func(...gulp.Ref) *undertaker.Task = gulp.Series //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	var order []string
 	step := func(name string) gulp.Ref {
@@ -103,7 +103,7 @@ func TestSeries(t *testing.T) {
 }
 
 func TestParallel(t *testing.T) {
-	var parallel func(...gulp.Ref) *undertaker.Task = gulp.Parallel
+	var parallel func(...gulp.Ref) *undertaker.Task = gulp.Parallel //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	var ran sync.Map
 	step := func(name string) gulp.Ref {
@@ -124,7 +124,7 @@ func TestParallel(t *testing.T) {
 }
 
 func TestTree(t *testing.T) {
-	var tree func(bool) *gulp.Node = gulp.Tree
+	var tree func(bool) *gulp.Node = gulp.Tree //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	gulp.Task("pkg-export-tree", func(context.Context) error { return nil })
 
@@ -135,7 +135,7 @@ func TestTree(t *testing.T) {
 }
 
 func TestLastRun(t *testing.T) {
-	var lastRun func(gulp.Ref, time.Duration) (time.Time, bool, error) = gulp.LastRun
+	var lastRun func(gulp.Ref, time.Duration) (time.Time, bool, error) = gulp.LastRun //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	gulp.Task("pkg-export-last-run", func(context.Context) error { return nil })
 	if err := gulp.Run(context.Background(), gulp.Name("pkg-export-last-run")); err != nil {
@@ -152,7 +152,7 @@ func TestLastRun(t *testing.T) {
 }
 
 func TestRegistry(t *testing.T) {
-	var registry func() undertaker.Registry = gulp.Registry
+	var registry func() undertaker.Registry = gulp.Registry //nolint:staticcheck // ST1023: the declared type pins the public signature
 
 	if registry() == nil {
 		t.Fatal("registry should back the default instance")

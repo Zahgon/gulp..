@@ -27,7 +27,7 @@ type TaskFunc = asyncdone.TaskFunc
 // JavaScript raises "Non-string provided as watch path" for anything that is
 // not a string; Go's type system already rules that out, so the only remaining
 // invalid input is the empty string.
-var ErrNonStringWatchPath = errors.New("Non-string provided as watch path")
+var ErrNonStringWatchPath = errors.New("Non-string provided as watch path") //nolint:staticcheck // ST1005: gulp's exact wording
 
 // ErrNoWatchPaths is returned when no watch paths are supplied at all.
 var ErrNoWatchPaths = errors.New("watch: no paths provided")
@@ -59,7 +59,8 @@ type Watcher struct {
 	ready     chan struct{}
 
 	// pending holds unlink events being held back by the atomic window,
-	// keyed by absolute path.
+	// keyed by absolute path. Every timer in it holds a slot in wg until it
+	// fires or is stopped, so Close also waits for a callback in flight.
 	pendingMu sync.Mutex
 	pending   map[string]*time.Timer
 }
@@ -148,6 +149,7 @@ func New(globs []string, opts Options, task TaskFunc) (*Watcher, error) {
 		return nil, err
 	}
 
+	w.wg.Add(1)
 	go w.announceReady()
 
 	return w, nil
@@ -296,7 +298,9 @@ func (w *Watcher) OnError(fn func(error)) {
 func (w *Watcher) Ready() <-chan struct{} { return w.ready }
 
 // Close stops watching and releases all resources. It is safe to call more
-// than once and blocks until the watcher's goroutines have exited.
+// than once and blocks until every goroutine the watcher started has exited:
+// the two loops, the initial scan, awaitWriteFinish pollers, atomic-window
+// timers and a task run in progress, which is cancelled through its context.
 func (w *Watcher) Close() error {
 	w.closeOne.Do(func() {
 		close(w.done)
@@ -304,7 +308,7 @@ func (w *Watcher) Close() error {
 
 		w.pendingMu.Lock()
 		for path, timer := range w.pending {
-			timer.Stop()
+			w.stopPending(timer)
 			delete(w.pending, path)
 		}
 		w.pendingMu.Unlock()
@@ -328,6 +332,7 @@ func (w *Watcher) filter(path string, isDir bool) bool {
 // When IgnoreInitial is false the files that already match are reported as
 // add events first, reproducing chokidar's startup burst.
 func (w *Watcher) announceReady() {
+	defer w.wg.Done()
 	if !w.opts.ignoreInitial {
 		w.emitInitial()
 	}
@@ -344,14 +349,22 @@ func (w *Watcher) emitInitial() {
 	w.mu.Unlock()
 
 	for _, root := range roots {
-		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			select {
 			case <-w.done:
 				return filepath.SkipAll
 			default:
 			}
 			if err != nil {
-				return nil //nolint:nilerr // an unreadable subtree is skipped, not fatal
+				// An unreadable entry is reported and skipped, as chokidar
+				// does; one bad subtree must not end the initial scan.
+				if !w.opts.ignorePermissionErrors || !errors.Is(err, fs.ErrPermission) {
+					w.emitError(fmt.Errorf("watch: %w", err))
+				}
+				if d != nil && d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			if w.ignored != nil && w.ignored.Match(normalizeUnicode(path)) {
 				if d.IsDir() {
@@ -368,7 +381,9 @@ func (w *Watcher) emitInitial() {
 			}
 			w.dispatch(kind, path)
 			return nil
-		})
+		}); err != nil {
+			w.emitError(fmt.Errorf("watch: %w", err))
+		}
 	}
 }
 
@@ -461,7 +476,9 @@ func (w *Watcher) handle(ev fswatch.Event) {
 func (w *Watcher) absorbAtomic(kind EventKind, path string) bool {
 	switch kind {
 	case EventUnlink:
+		w.wg.Add(1)
 		timer := time.AfterFunc(w.opts.atomic, func() {
+			defer w.wg.Done()
 			w.pendingMu.Lock()
 			delete(w.pending, path)
 			w.pendingMu.Unlock()
@@ -473,7 +490,7 @@ func (w *Watcher) absorbAtomic(kind EventKind, path string) bool {
 		})
 		w.pendingMu.Lock()
 		if old, ok := w.pending[path]; ok {
-			old.Stop()
+			w.stopPending(old)
 		}
 		w.pending[path] = timer
 		w.pendingMu.Unlock()
@@ -483,7 +500,7 @@ func (w *Watcher) absorbAtomic(kind EventKind, path string) bool {
 		w.pendingMu.Lock()
 		timer, ok := w.pending[path]
 		if ok {
-			timer.Stop()
+			w.stopPending(timer)
 			delete(w.pending, path)
 		}
 		w.pendingMu.Unlock()
@@ -498,10 +515,20 @@ func (w *Watcher) absorbAtomic(kind EventKind, path string) bool {
 	}
 }
 
+// stopPending stops an atomic-window timer and, when that prevented its
+// callback from running, releases the slot the callback would have released.
+func (w *Watcher) stopPending(timer *time.Timer) {
+	if timer.Stop() {
+		w.wg.Done()
+	}
+}
+
 // awaitWriteFinish holds an event until the file's size stops changing.
 func (w *Watcher) awaitWriteFinish(kind EventKind, path string) {
 	awf := w.opts.awaitWriteFinish
+	w.wg.Add(1)
 	go func() {
+		defer w.wg.Done()
 		var lastSize int64 = -1
 		stableSince := time.Time{}
 
@@ -612,19 +639,27 @@ func (w *Watcher) runLoop() {
 	}
 	defer stopTimer()
 
+	// start runs the task on its own goroutine, cancelled when the watcher
+	// closes. Both goroutines hold a slot in wg, so Close waits for the run
+	// to return; complete is buffered, so the result never blocks a run that
+	// finishes after runLoop has returned.
 	start := func() {
 		running = true
+		w.wg.Add(2)
 		go func() {
+			defer w.wg.Done()
 			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
 			go func() {
+				defer w.wg.Done()
 				select {
 				case <-w.done:
 					cancel()
 				case <-ctx.Done():
 				}
 			}()
-			complete <- asyncdone.Run(ctx, w.task)
+			err := asyncdone.Run(ctx, w.task)
+			cancel()
+			complete <- err
 		}()
 	}
 

@@ -106,9 +106,11 @@ func TestParallelRunsConcurrently(t *testing.T) {
 // the port takes that option deliberately: a failing build should not wait for
 // work whose result is about to be thrown away.
 func TestParallelCancelsSiblingsOnError(t *testing.T) {
+	started := make(chan struct{})
 	cancelled := make(chan struct{})
 
 	slow := func(ctx context.Context) error {
+		close(started)
 		select {
 		case <-ctx.Done():
 			close(cancelled)
@@ -117,8 +119,14 @@ func TestParallelCancelsSiblingsOnError(t *testing.T) {
 			return errors.New("was not cancelled")
 		}
 	}
+	// The failure waits for the sibling to be running: a sibling that has not
+	// started yet is never started at all, which would not exercise cancellation.
+	failOnceStarted := func(context.Context) error {
+		<-started
+		return errFirst
+	}
 
-	err := Parallel(fail(errFirst), slow)(context.Background())
+	err := Parallel(failOnceStarted, slow)(context.Background())
 	if !errors.Is(err, errFirst) {
 		t.Fatalf("err = %v, want errFirst", err)
 	}

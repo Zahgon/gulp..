@@ -214,7 +214,11 @@ func TestWatchThroughFacade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("watch: %v", err)
 		}
-		defer w.Close()
+		defer func() {
+			if err := w.Close(); err != nil {
+				t.Errorf("closing watcher: %v", err)
+			}
+		}()
 		<-w.Ready()
 		time.Sleep(300 * time.Millisecond)
 
@@ -252,7 +256,11 @@ func TestWatchThroughFacade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("watch: %v", err)
 		}
-		defer w.Close()
+		defer func() {
+			if err := w.Close(); err != nil {
+				t.Errorf("closing watcher: %v", err)
+			}
+		}()
 		<-w.Ready()
 		time.Sleep(300 * time.Millisecond)
 
