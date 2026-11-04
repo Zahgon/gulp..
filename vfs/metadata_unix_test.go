@@ -3,10 +3,13 @@
 package vfs
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/gulpjs/gulp-go/pipeline"
 	"github.com/gulpjs/gulp-go/vinyl"
 )
 
@@ -96,5 +99,52 @@ func TestIsOwnerAcceptsAFileWeJustCreated(t *testing.T) {
 
 	if !isOwner(vinyl.StatFromFileInfo(info)) {
 		t.Error("isOwner = false for a file this process just created")
+	}
+}
+
+// vinyl-fs passes a failed fchown to dest's callback, so dest reports it rather
+// than writing the file and carrying on.
+func TestDestReportsAFailedChown(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root may chown to any id")
+	}
+	base := t.TempDir()
+	f, err := vinyl.New(vinyl.Options{
+		Cwd:      base,
+		Base:     base,
+		Path:     filepath.Join(base, "app.js"),
+		Contents: vinyl.Buffer([]byte("x")),
+	})
+	if err != nil {
+		t.Fatalf("vinyl.New: %v", err)
+	}
+	f.Stat = &vinyl.Stat{FileMode: 0o644, UID: os.Geteuid() + 1, GID: vinyl.InvalidID}
+
+	_, err = pipeline.New(pipeline.From(f)).Pipe(Dest(t.TempDir(), DestOptions{})).Collect(context.Background())
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("dest error = %v, want a permission error from chown", err)
+	}
+}
+
+// Without a stat of its own a file gets one with unknown ids, as vinyl-fs's
+// empty fs.Stats has, so dest never tries to chown it.
+func TestDestLeavesTheOwnerOfAStatlessFile(t *testing.T) {
+	base := t.TempDir()
+	f, err := vinyl.New(vinyl.Options{
+		Cwd:      base,
+		Base:     base,
+		Path:     filepath.Join(base, "app.js"),
+		Contents: vinyl.Buffer([]byte("x")),
+	})
+	if err != nil {
+		t.Fatalf("vinyl.New: %v", err)
+	}
+	out := t.TempDir()
+	files, err := pipeline.New(pipeline.From(f)).Pipe(Dest(out, DestOptions{})).Collect(context.Background())
+	if err != nil {
+		t.Fatalf("dest: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d files, want 1", len(files))
 	}
 }

@@ -1,7 +1,9 @@
 package vfs
 
 import (
+	"errors"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/gulpjs/gulp-go/vinyl"
@@ -80,49 +82,60 @@ func ownerDiff(current, wanted *vinyl.Stat) (uid, gid int, ok bool) {
 //
 // handle is the still-open destination, so the changes go through fchmod,
 // futimes and fchown rather than through the path, exactly as vinyl-fs does;
-// it is nil for directories, which are adjusted by path instead. Every step is
-// best effort: vinyl-fs swallows these errors too, because a build that copied
-// a file correctly should not fail merely because it could not also copy the
-// file's ownership.
-func (w *writer) updateMetadata(handle *os.File, f *vinyl.File) {
+// it is nil for directories, which are adjusted by path instead. Errors follow
+// vinyl-fs's callback chain: every needed step is attempted, the first failure
+// is returned, and only a futimes the filesystem does not implement (ENOSYS)
+// is forgiven.
+func (w *writer) updateMetadata(handle *os.File, f *vinyl.File) error {
 	path := f.Path()
 
-	current := statOf(handle, path)
-	if current == nil {
-		return
+	current, err := statOf(handle, path)
+	if err != nil {
+		return err
 	}
 
 	// isOwner gates all three adjustments, not just the ownership one: a
 	// process that does not own the file cannot chmod or utime it either, and
 	// vinyl-fs returns early on the same condition.
+	var firstErr error
 	if f.Stat != nil && isOwner(current) {
 		if perm, ok := modeDiff(current.FileMode, f.Stat.FileMode); ok {
-			_ = chmodTarget(handle, path, perm)
+			firstErr = chmodTarget(handle, path, perm)
 		}
 		if atime, mtime, ok := timesDiff(current, f.Stat); ok {
-			_ = chtimesTarget(handle, path, atime, mtime)
+			if err := chtimesTarget(handle, path, atime, mtime); err != nil && !errors.Is(err, syscall.ENOSYS) && firstErr == nil {
+				firstErr = err
+			}
 		}
 		if uid, gid, ok := ownerDiff(current, f.Stat); ok {
-			_ = chownTarget(handle, path, uid, gid)
+			if err := chownTarget(handle, path, uid, gid); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 
-	if refreshed := statOf(handle, path); refreshed != nil {
-		f.Stat = refreshed
+	refreshed, err := statOf(handle, path)
+	if err != nil {
+		return errors.Join(firstErr, err)
 	}
+	f.Stat = refreshed
+	return firstErr
 }
 
-// statOf reads the destination's current metadata, preferring the open handle
-// so that the values describe the file that was actually written.
-func statOf(handle *os.File, path string) *vinyl.Stat {
+// statOf reads the destination's current metadata, from the open handle when
+// there is one so that the values describe the file that was actually written.
+func statOf(handle *os.File, path string) (*vinyl.Stat, error) {
+	var (
+		info os.FileInfo
+		err  error
+	)
 	if handle != nil {
-		if info, err := handle.Stat(); err == nil {
-			return vinyl.StatFromFileInfo(info)
-		}
+		info, err = handle.Stat()
+	} else {
+		info, err = os.Lstat(path)
 	}
-	info, err := os.Lstat(path)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return vinyl.StatFromFileInfo(info)
+	return vinyl.StatFromFileInfo(info), nil
 }

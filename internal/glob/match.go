@@ -20,7 +20,11 @@ type Options struct {
 	NoBrace bool
 	// NoGlobstar makes `**` behave like a single `*`.
 	NoGlobstar bool
-	// NoExt disables extglob syntax such as `+(a|b)`.
+	// NoExt is picomatch's noext flag. The matcher never interprets extglob
+	// syntax such as `+(a|b)`: doublestar matches those characters literally,
+	// which is what noext asks for, so the flag changes nothing here. With
+	// noext off, picomatch would expand extglobs; that is a known gap of this
+	// port, recorded in MIGRATION.md.
 	NoExt bool
 	// NoCase makes matching case-insensitive.
 	NoCase bool

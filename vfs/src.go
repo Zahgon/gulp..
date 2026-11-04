@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/gulpjs/gulp-go/internal/globstream"
@@ -59,7 +58,9 @@ type SrcOptions struct {
 	NoBrace bool
 	// NoGlobstar makes "**" behave like "*" and never cross directories.
 	NoGlobstar bool
-	// NoExt disables extglob patterns such as "+(a|b)".
+	// NoExt is accepted for API parity with the src() noext option. Extglob
+	// patterns such as "+(a|b)" are never expanded (see glob.Options.NoExt),
+	// so they always match literally, as they would with noext set.
 	NoExt bool
 	// NoCase makes glob matching case-insensitive.
 	NoCase bool
@@ -166,22 +167,7 @@ func sinceFilter(since Option[time.Time]) pipeline.Transform {
 // `lib/src/read-contents`.
 type contentsReader struct {
 	opts   SrcOptions
-	codecs sync.Map // string -> *codec
-}
-
-// codecFor resolves and caches the encoding for a file.
-func (r *contentsReader) codecFor(f *vinyl.File) (*codec, error) {
-	name := r.opts.Encoding.Resolve(f, DefaultEncoding)
-	if cached, ok := r.codecs.Load(name); ok {
-		c, _ := cached.(*codec)
-		return c, nil
-	}
-	c, err := lookupEncoding(name)
-	if err != nil {
-		return nil, err
-	}
-	r.codecs.Store(name, c)
-	return c, nil
+	codecs codecCache
 }
 
 func (r *contentsReader) Transform(ctx context.Context, in <-chan *vinyl.File, out chan<- *vinyl.File) error {
@@ -233,7 +219,7 @@ func (r *contentsReader) read(f *vinyl.File) error {
 
 // readBuffer loads the whole file, transcodes it to UTF-8 and strips a BOM.
 func (r *contentsReader) readBuffer(f *vinyl.File) error {
-	c, err := r.codecFor(f)
+	c, err := r.codecs.forFile(r.opts.Encoding, f)
 	if err != nil {
 		return err
 	}
@@ -256,7 +242,7 @@ func (r *contentsReader) readBuffer(f *vinyl.File) error {
 // something actually reads it. This is the port of vinyl-fs's use of
 // `lazystream`.
 func (r *contentsReader) readStream(f *vinyl.File) error {
-	c, err := r.codecFor(f)
+	c, err := r.codecs.forFile(r.opts.Encoding, f)
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gulpjs/gulp-go/pipeline"
 	"github.com/gulpjs/gulp-go/vinyl"
@@ -264,6 +265,34 @@ func TestIfPropagatesBranchError(t *testing.T) {
 
 	if !errors.Is(err, boom) {
 		t.Fatalf("error = %v, want boom", err)
+	}
+}
+
+// A panicking predicate becomes a pipeline error. A branch that is still
+// sending an earlier file when the panic unwinds must finish before the
+// pipeline closes If's output; a send on the closed channel would crash the
+// process.
+func TestIfWaitsForBranchesWhenCondPanics(t *testing.T) {
+	slow := pipeline.Map(func(_ context.Context, f *vinyl.File) (*vinyl.File, error) {
+		time.Sleep(20 * time.Millisecond)
+		return f, nil
+	})
+	cond := func(f *vinyl.File) bool {
+		if f.Basename() == "b.js" {
+			panic("cond failed")
+		}
+		return true
+	}
+	for range 20 {
+		in := []*vinyl.File{file(t, "a.js", "x"), file(t, "b.js", "x")}
+		_, err := pipeline.New(pipeline.From(in...)).
+			Pipe(If(cond, slow, nil)).
+			Collect(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "cond failed") {
+			t.Fatalf("error = %v, want the predicate's panic", err)
+		}
+		// Give a branch that was not waited for the time to wake and send.
+		time.Sleep(40 * time.Millisecond)
 	}
 }
 

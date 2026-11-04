@@ -380,6 +380,68 @@ func TestCloneCopiesMetadata(t *testing.T) {
 	}
 }
 
+func TestCloneDeepCopiesCustomPropertiesByDefault(t *testing.T) {
+	f := sample(t)
+	f.Set("meta", map[string]any{"tags": []any{"a"}})
+
+	clone := f.Clone()
+	meta, _ := clone.Get("meta")
+	meta.(map[string]any)["tags"].([]any)[0] = "changed"
+
+	original, _ := f.Get("meta")
+	if got := original.(map[string]any)["tags"].([]any)[0]; got != "a" {
+		t.Fatalf("original property changed to %v; clone() must copy deeply", got)
+	}
+}
+
+func TestCloneWithOptionsCopiesDeeplyOnlyWhenAsked(t *testing.T) {
+	yes := true
+	for _, tc := range []struct {
+		name string
+		opts CloneOptions
+		deep bool
+	}{
+		{"deep unset", CloneOptions{}, false},
+		{"deep true", CloneOptions{Deep: &yes}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := sample(t)
+			f.Set("meta", map[string]any{"n": 1})
+
+			clone := f.Clone(tc.opts)
+			meta, _ := clone.Get("meta")
+			meta.(map[string]any)["n"] = 2
+
+			original, _ := f.Get("meta")
+			shared := original.(map[string]any)["n"] == 2
+			if shared == tc.deep {
+				t.Fatalf("clone shares the property = %v, want %v", shared, !tc.deep)
+			}
+		})
+	}
+}
+
+func TestCloneDeepCopiesCircularProperties(t *testing.T) {
+	type node struct {
+		Name string
+		Next *node
+	}
+	loop := &node{Name: "a"}
+	loop.Next = loop
+	f := sample(t)
+	f.Set("loop", loop)
+
+	clone := f.Clone()
+	got, _ := clone.Get("loop")
+	copied := got.(*node)
+	if copied == loop {
+		t.Fatal("clone shares the property")
+	}
+	if copied.Next != copied {
+		t.Fatal("clone broke the cycle")
+	}
+}
+
 func TestCloneDuplicatesBufferByDefault(t *testing.T) {
 	f := sample(t)
 	clone := f.Clone()

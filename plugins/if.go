@@ -28,6 +28,16 @@ func If(cond func(*vinyl.File) bool, then, otherwise pipeline.Transform) pipelin
 
 		yes := newBranch(ctx, then, out)
 		no := newBranch(ctx, otherwise, out)
+		// If cond panics, the pipeline recovers the panic and closes out, while
+		// a branch may still be sending a file it already received. Closing
+		// both branches here waits for them first, so neither can send on the
+		// closed channel. On a normal return the explicit closes below have
+		// already collected the branches' errors, so these calls find both
+		// branches finished and return nil.
+		defer func() {
+			_ = yes.close()
+			_ = no.close()
+		}()
 
 		var err error
 		for {
@@ -104,6 +114,8 @@ func (b *branch) send(f *vinyl.File) error {
 	}
 }
 
+// close ends the branch's input and waits for its transform to return. It may
+// be called more than once; only the first call reports the branch's error.
 func (b *branch) close() error {
 	b.once.Do(func() { close(b.in) })
 	return <-b.done

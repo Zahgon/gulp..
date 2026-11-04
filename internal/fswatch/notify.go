@@ -374,9 +374,13 @@ func (w *notifyWatcher) replay(dir string, depth int) {
 		w.remember(child, isDir)
 		w.emit(Event{Path: child, Op: OpCreate, IsDir: isDir})
 		if isDir {
-			if err := w.register(child, depth+1); err == nil {
-				w.replay(child, depth+1)
+			// register already drops the errors IgnorePermissionErrors covers;
+			// anything else is reported, as extend does for its directory.
+			if err := w.register(child, depth+1); err != nil {
+				w.emitError(err)
+				continue
 			}
+			w.replay(child, depth+1)
 		}
 	}
 }

@@ -255,8 +255,11 @@ on failure.
   the **open descriptor** (`fchmod`, `futimes`, `fchown`) rather than by path,
   so nothing can be swapped underneath between write and adjustment. All three
   are gated behind `isOwner`, which passes only for root or the file's own
-  owner — matching JavaScript, which returns early on the same condition. Every
-  error is deliberately swallowed, as upstream does.
+  owner — matching JavaScript, which returns early on the same condition. A
+  failed `fchmod`, `futimes` or `fchown` is returned after the remaining steps
+  have run, the first failure winning, exactly as upstream's callback chain
+  does; only a `futimes` the filesystem does not implement (`ENOSYS`) is
+  forgiven.
 - `vinyl.Stat` therefore carries `UID` and `GID`, read from `syscall.Stat_t`
   behind a `unix` build tag. `vinyl.InvalidID` (-1) and `vinyl.ValidID` port
   `isValidUnixId`, giving Go the three-state answer JavaScript gets from
@@ -269,6 +272,13 @@ on failure.
   Node's `path.relative` even when one side is already relative.
 - `Clone(CloneOptions{Contents: &false})` **shares** the buffer rather than
   nulling contents, which is what vinyl documents `contents: false` to mean.
+- `Clone()` with no options deep-copies custom properties, as `clone()` does.
+  Once options are passed, `Deep` must be set to true for a deep copy, because
+  vinyl reads an options object's `deep` as `opt.deep === true`.
+- **Extglobs are not expanded.** Matching runs on doublestar, which has no
+  extglob syntax, so `+(a|b)`, `@(a|b)`, `!(a)` and the like match their
+  characters literally. That is what picomatch's `noext` asks for, so `NoExt`
+  has no further effect; with `noext` off, picomatch would expand them.
 
 ## 8. Watching
 

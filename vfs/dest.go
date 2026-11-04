@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/gulpjs/gulp-go/internal/sourcemap"
 	"github.com/gulpjs/gulp-go/pipeline"
@@ -120,7 +119,7 @@ func DestWith(directory func(*vinyl.File) string, opts DestOptions) pipeline.Tra
 type writer struct {
 	directory func(*vinyl.File) string
 	opts      DestOptions
-	codecs    sync.Map // string -> *codec
+	codecs    codecCache
 }
 
 func (w *writer) Transform(ctx context.Context, in <-chan *vinyl.File, out chan<- *vinyl.File) error {
@@ -205,7 +204,10 @@ func (w *writer) prepare(f *vinyl.File) error {
 	if !f.IsSymbolic() {
 		mode := w.opts.Mode.Resolve(f, defaultModeFor(f))
 		if f.Stat == nil {
-			f.Stat = &vinyl.Stat{}
+			// vinyl-fs fills in an empty fs.Stats, whose uid and gid are
+			// undefined, so the owner is left alone. A zero UID would be
+			// root and ask for a chown.
+			f.Stat = &vinyl.Stat{UID: vinyl.InvalidID, GID: vinyl.InvalidID}
 		}
 		f.Stat.FileMode = applyType(f.Stat.FileMode, mode)
 	}
@@ -247,13 +249,12 @@ func (w *writer) writeDir(f *vinyl.File) error {
 	if err := os.MkdirAll(f.Path(), mode); err != nil {
 		return fmt.Errorf("creating directory %s: %w", f.Path(), err)
 	}
-	w.updateMetadata(nil, f)
-	return nil
+	return w.updateMetadata(nil, f)
 }
 
 // writeBuffer writes buffered contents in one shot.
 func (w *writer) writeBuffer(f *vinyl.File) error {
-	c, err := w.codecFor(f)
+	c, err := w.codecs.forFile(w.opts.Encoding, f)
 	if err != nil {
 		return err
 	}
@@ -278,8 +279,9 @@ func (w *writer) writeBuffer(f *vinyl.File) error {
 	if _, err := handle.Write(encoded); err != nil {
 		return fmt.Errorf("writing %s: %w", f.Path(), errors.Join(err, handle.Close()))
 	}
-	w.updateMetadata(handle, f)
-	if err := handle.Close(); err != nil {
+	// vinyl-fs closes the descriptor whether or not the metadata update failed
+	// and reports the update's error first.
+	if err := errors.Join(w.updateMetadata(handle, f), handle.Close()); err != nil {
 		return fmt.Errorf("writing %s: %w", f.Path(), err)
 	}
 	return nil
@@ -289,7 +291,7 @@ func (w *writer) writeBuffer(f *vinyl.File) error {
 // a fresh stream over the written copy, so that a later stage can still read
 // the contents even though the original stream has been consumed.
 func (w *writer) writeStream(f *vinyl.File) error {
-	c, err := w.codecFor(f)
+	c, err := w.codecs.forFile(w.opts.Encoding, f)
 	if err != nil {
 		return err
 	}
@@ -315,7 +317,9 @@ func (w *writer) writeStream(f *vinyl.File) error {
 		return nil
 	}()
 	if copyErr == nil {
-		w.updateMetadata(handle, f)
+		if err := w.updateMetadata(handle, f); err != nil {
+			copyErr = fmt.Errorf("writing %s: %w", f.Path(), err)
+		}
 	}
 	closeErr := handle.Close()
 	if copyErr != nil {
@@ -427,21 +431,6 @@ func (w *writer) mkdirp(dir string) error {
 		return fmt.Errorf("creating directory %s: %w", dir, err)
 	}
 	return nil
-}
-
-// codecFor resolves and caches the output encoding for a file.
-func (w *writer) codecFor(f *vinyl.File) (*codec, error) {
-	name := w.opts.Encoding.Resolve(f, DefaultEncoding)
-	if cached, ok := w.codecs.Load(name); ok {
-		c, _ := cached.(*codec)
-		return c, nil
-	}
-	c, err := lookupEncoding(name)
-	if err != nil {
-		return nil, err
-	}
-	w.codecs.Store(name, c)
-	return c, nil
 }
 
 // defaultModeFor returns the mode a file should be written with when the mode

@@ -315,8 +315,10 @@ type CloneOptions struct {
 	// Contents, when false, shares the contents with the original instead of
 	// copying them. Mirrors `clone({ contents: false })`.
 	Contents *bool
-	// Deep controls whether custom properties are deep-copied. Defaults to
-	// true, as in JS.
+	// Deep, when true, deep-copies custom properties; otherwise the clone
+	// shares their values. Clone with no options at all copies deeply, but
+	// once options are passed Deep must be set: vinyl reads an options
+	// object's deep as `opt.deep === true`.
 	Deep *bool
 }
 
@@ -325,10 +327,19 @@ type CloneOptions struct {
 // re-derived from the same opener so both copies can be read independently.
 func (f *File) Clone(opts ...CloneOptions) *File {
 	var o CloneOptions
+	deep := true
 	if len(opts) > 0 {
 		o = opts[0]
+		deep = o.Deep != nil && *o.Deep
 	}
 	copyContents := o.Contents == nil || *o.Contents
+
+	custom := maps.Clone(f.custom)
+	if deep {
+		for k, v := range custom {
+			custom[k] = deepCopy(v)
+		}
+	}
 
 	c := &File{
 		cwd:       f.cwd,
@@ -337,7 +348,7 @@ func (f *File) Clone(opts ...CloneOptions) *File {
 		Stat:      f.Stat.Clone(),
 		SourceMap: f.SourceMap.Clone(),
 		symlink:   f.symlink,
-		custom:    maps.Clone(f.custom),
+		custom:    custom,
 	}
 
 	switch contents := f.Contents.(type) {

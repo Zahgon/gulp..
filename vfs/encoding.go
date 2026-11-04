@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"unicode/utf8"
+
+	"github.com/gulpjs/gulp-go/vinyl"
 
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/ianaindex"
@@ -81,6 +84,27 @@ var encodingAliases = map[string]string{
 var bomEncodings = map[string]bool{
 	"UTF-16LE": true,
 	"UTF-16BE": true,
+}
+
+// codecCache memoises lookupEncoding for src() and dest(), so a stream of
+// files that share an encoding resolves it once.
+type codecCache struct {
+	m sync.Map // string -> *codec
+}
+
+// forFile resolves the encoding option for f, defaulting to [DefaultEncoding].
+func (cc *codecCache) forFile(enc Option[string], f *vinyl.File) (*codec, error) {
+	name := enc.Resolve(f, DefaultEncoding)
+	if cached, ok := cc.m.Load(name); ok {
+		c, _ := cached.(*codec)
+		return c, nil
+	}
+	c, err := lookupEncoding(name)
+	if err != nil {
+		return nil, err
+	}
+	cc.m.Store(name, c)
+	return c, nil
 }
 
 // lookupEncoding resolves an encoding name to a codec. An empty name means
