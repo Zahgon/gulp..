@@ -100,36 +100,11 @@ func (l *linker) link(f *vinyl.File) error {
 	// directory, so it must be captured first.
 	target := f.Path()
 
-	cwd, err := resolveCwd(l.opts.Cwd)
+	base, err := retarget(f, l.opts.Cwd, l.directory)
 	if err != nil {
 		return err
 	}
-
-	folder := l.directory(f)
-	if folder == "" {
-		return ErrInvalidOutputFolder
-	}
-
-	relative, err := f.Relative()
-	if err != nil {
-		return err
-	}
-
-	base := folder
-	if !filepath.IsAbs(base) {
-		base = filepath.Join(cwd, base)
-	}
-	linkPath := filepath.Join(base, relative)
-
-	if err := f.SetCwd(cwd); err != nil {
-		return err
-	}
-	if err := f.SetBase(base); err != nil {
-		return err
-	}
-	if err := f.SetPath(linkPath); err != nil {
-		return err
-	}
+	linkPath := f.Path()
 	f.Contents = nil
 	if err := f.SetSymlink(target); err != nil {
 		return err
@@ -144,6 +119,8 @@ func (l *linker) link(f *vinyl.File) error {
 	// stays valid if the tree is moved. Both sides are made absolute first
 	// because filepath.Rel refuses to mix the two forms, whereas Node's
 	// path.relative resolves each against the cwd and so always answers.
+	// filepath.Rel can then fail only across Windows volumes, where
+	// path.relative returns the target unchanged, so the target is kept.
 	linkTarget := target
 	if l.opts.RelativeSymlinks.Resolve(f, false) {
 		if rel, err := filepath.Rel(absoluteFrom(f.Cwd(), base), absoluteFrom(f.Cwd(), target)); err == nil {
@@ -154,36 +131,17 @@ func (l *linker) link(f *vinyl.File) error {
 		}
 	}
 
-	if err := l.create(f, linkTarget, linkPath); err != nil {
+	if err := createSymlink(linkTarget, linkPath, l.opts.Overwrite.Resolve(f, true)); err != nil {
 		return err
 	}
 
 	// The re-emitted stat must describe the link itself, never its target.
-	if info, err := os.Lstat(linkPath); err == nil {
-		f.Stat = vinyl.StatFromFileInfo(info)
+	// vinyl-fs's reflectLinkStat passes an lstat failure on, and so does this.
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		return fmt.Errorf("reading symlink %s: %w", linkPath, err)
 	}
-	return nil
-}
-
-// create makes the link, replacing an existing entry only when overwriting is
-// enabled. An existing entry with overwriting disabled is not an error.
-func (l *linker) create(f *vinyl.File, target, linkPath string) error {
-	err := os.Symlink(target, linkPath)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("creating symlink %s: %w", linkPath, err)
-	}
-	if !l.opts.Overwrite.Resolve(f, true) {
-		return nil
-	}
-	if err := os.Remove(linkPath); err != nil {
-		return fmt.Errorf("replacing symlink %s: %w", linkPath, err)
-	}
-	if err := os.Symlink(target, linkPath); err != nil {
-		return fmt.Errorf("creating symlink %s: %w", linkPath, err)
-	}
+	f.Stat = vinyl.StatFromFileInfo(info)
 	return nil
 }
 

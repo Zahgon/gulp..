@@ -168,34 +168,7 @@ func (w *writer) Transform(ctx context.Context, in <-chan *vinyl.File, out chan<
 // happen before anything is written because the write path, the symlink base
 // and the source map URL are all derived from it.
 func (w *writer) prepare(f *vinyl.File) error {
-	cwd, err := resolveCwd(w.opts.Cwd)
-	if err != nil {
-		return err
-	}
-
-	folder := w.directory(f)
-	if folder == "" {
-		return ErrInvalidOutputFolder
-	}
-
-	relative, err := f.Relative()
-	if err != nil {
-		return err
-	}
-
-	base := folder
-	if !filepath.IsAbs(base) {
-		base = filepath.Join(cwd, base)
-	}
-	writePath := filepath.Join(base, relative)
-
-	if err := f.SetCwd(cwd); err != nil {
-		return err
-	}
-	if err := f.SetBase(base); err != nil {
-		return err
-	}
-	if err := f.SetPath(writePath); err != nil {
+	if _, err := retarget(f, w.opts.Cwd, w.directory); err != nil {
 		return err
 	}
 
@@ -354,31 +327,73 @@ func (w *writer) writeSymlink(f *vinyl.File) error {
 	}
 
 	// Relative links are computed against the destination base, which prepare()
-	// has already pointed at the output directory.
+	// has already pointed at the output directory. filepath.Rel fails only
+	// across Windows volumes, where Node's path.relative returns the target
+	// unchanged, so the absolute target is kept.
 	if w.opts.RelativeSymlinks.Resolve(f, false) && filepath.IsAbs(target) {
 		if rel, err := filepath.Rel(f.Base(), target); err == nil {
 			target = rel
 		}
 	}
 
-	err := os.Symlink(target, f.Path())
+	return createSymlink(target, f.Path(), w.opts.Overwrite.Resolve(f, true))
+}
+
+// retarget points f at its place under the output folder that directory
+// chooses, the location step dest() and symlink() share with vinyl-fs's
+// prepare stages, and returns the new base.
+func retarget(f *vinyl.File, cwdOpt string, directory func(*vinyl.File) string) (string, error) {
+	cwd, err := resolveCwd(cwdOpt)
+	if err != nil {
+		return "", err
+	}
+
+	folder := directory(f)
+	if folder == "" {
+		return "", ErrInvalidOutputFolder
+	}
+
+	relative, err := f.Relative()
+	if err != nil {
+		return "", err
+	}
+
+	base := folder
+	if !filepath.IsAbs(base) {
+		base = filepath.Join(cwd, base)
+	}
+
+	if err := f.SetCwd(cwd); err != nil {
+		return "", err
+	}
+	if err := f.SetBase(base); err != nil {
+		return "", err
+	}
+	if err := f.SetPath(filepath.Join(base, relative)); err != nil {
+		return "", err
+	}
+	return base, nil
+}
+
+// createSymlink makes the link at linkPath. An existing entry is replaced only
+// when overwrite is set; otherwise it wins, without an error, as vinyl-fs's
+// symlink with the "wx" flag does.
+func createSymlink(target, linkPath string, overwrite bool) error {
+	err := os.Symlink(target, linkPath)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("creating symlink %s: %w", f.Path(), err)
+		return fmt.Errorf("creating symlink %s: %w", linkPath, err)
 	}
-
-	// The destination exists. Replacing it is only correct when overwriting is
-	// enabled; otherwise the existing entry wins, without an error.
-	if !w.opts.Overwrite.Resolve(f, true) {
+	if !overwrite {
 		return nil
 	}
-	if err := os.Remove(f.Path()); err != nil {
-		return fmt.Errorf("replacing symlink %s: %w", f.Path(), err)
+	if err := os.Remove(linkPath); err != nil {
+		return fmt.Errorf("replacing symlink %s: %w", linkPath, err)
 	}
-	if err := os.Symlink(target, f.Path()); err != nil {
-		return fmt.Errorf("creating symlink %s: %w", f.Path(), err)
+	if err := os.Symlink(target, linkPath); err != nil {
+		return fmt.Errorf("creating symlink %s: %w", linkPath, err)
 	}
 	return nil
 }
